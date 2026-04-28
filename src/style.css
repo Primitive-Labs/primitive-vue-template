@@ -9,6 +9,39 @@
 /*                                                                            */
 /* -------------------------------------------------------------------------- */
 
+/*
+ * Default palette dark mode (anchors specificity 0,1,1 so `:root.dark` cannot
+ * be silently overridden by a later `.dark` rule). Values mirror primitive-app.
+ */
+:root.dark {
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --card: oklch(0.208 0.042 265.755);
+  --card-foreground: oklch(0.984 0.003 247.858);
+  --popover: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.984 0.003 247.858);
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary: oklch(0.279 0.041 260.031);
+  --secondary-foreground: oklch(0.984 0.003 247.858);
+  --muted: oklch(0.279 0.041 260.031);
+  --muted-foreground: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.279 0.041 260.031);
+  --accent-foreground: oklch(0.984 0.003 247.858);
+  --destructive: oklch(0.55 0.23 25);
+  --border: oklch(0.279 0.041 260.031);
+  --input: oklch(0.279 0.041 260.031);
+  --ring: oklch(0.446 0.043 257.281);
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(0.279 0.041 260.031);
+  --sidebar-ring: oklch(0.446 0.043 257.281);
+}
+
 /* Neutral theme – green/teal light & dark variant to contrast with default. */
 :root.theme-neutral {
   --radius: 0.625rem;

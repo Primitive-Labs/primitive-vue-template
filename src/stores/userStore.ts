@@ -1249,7 +1249,17 @@ export const useUserStore = defineStore("user", () => {
       loadPrefsLogger.debug("Loading user preferences...");
       const prefs = await UserPref.query({});
       const prefsObject: UserPrefsMap = {};
+      const garbageKeys: string[] = [];
       for (const pref of prefs.data) {
+        if (
+          !pref.key ||
+          pref.key === "undefined" ||
+          pref.value === undefined ||
+          pref.value === "undefined"
+        ) {
+          garbageKeys.push(pref.key);
+          continue;
+        }
         try {
           prefsObject[pref.key] = JSON.parse(pref.value) as unknown;
         } catch (error) {
@@ -1262,8 +1272,35 @@ export const useUserStore = defineStore("user", () => {
         "User preferences loaded:",
         Object.keys(prefsObject)
       );
+      if (garbageKeys.length > 0) {
+        loadPrefsLogger.debug("Cleaning up garbage prefs", { garbageKeys });
+        await cleanupGarbagePrefs();
+      }
     } catch (error) {
       loadPrefsLogger.error("Error loading user preferences:", error);
+    }
+  };
+
+  const cleanupGarbagePrefs = async (): Promise<void> => {
+    const cleanupLogger = logger.forScope("cleanupGarbagePrefs");
+    try {
+      const allPrefs = await UserPref.query({});
+      for (const pref of allPrefs.data) {
+        if (
+          !pref.key ||
+          pref.key === "undefined" ||
+          pref.value === undefined ||
+          pref.value === "undefined"
+        ) {
+          try {
+            await pref.delete();
+          } catch (error) {
+            cleanupLogger.debug("Failed to delete garbage pref", { error });
+          }
+        }
+      }
+    } catch (error) {
+      cleanupLogger.debug("Cleanup failed", { error });
     }
   };
 
@@ -1315,6 +1352,15 @@ export const useUserStore = defineStore("user", () => {
           }
         })(),
       });
+      if (typeof key !== "string" || key.length === 0 || key === "undefined") {
+        throw new Error(`setPref called with invalid key: ${String(key)}`);
+      }
+      if (value === undefined) {
+        throw new Error(
+          `setPref called with undefined value for key "${key}". ` +
+            "Use deletePref() to remove a preference."
+        );
+      }
       if (!isAuthenticated.value) throw new Error("User not authenticated");
       if (!rootDocOpen) {
         logger.log("Root doc not open; initializing...");

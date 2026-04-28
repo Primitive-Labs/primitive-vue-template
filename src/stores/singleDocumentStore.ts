@@ -418,8 +418,15 @@ export const useSingleDocumentStore = defineStore("singleDocument", () => {
     documentId: string
   ): Promise<void> => {
     const persistLogger = logger.forScope("persistCurrentDocumentId");
+    const userStore = useUserStore();
+    if (!userStore.isAuthenticated) {
+      persistLogger.debug("Skipping persist; user not yet authenticated", {
+        documentId,
+        prefKey: LAST_USED_DOC_PREF_KEY,
+      });
+      return;
+    }
     try {
-      const userStore = useUserStore();
       await userStore.setPref(LAST_USED_DOC_PREF_KEY, documentId);
       persistLogger.debug("Saved current document ID to user preferences", {
         documentId,
