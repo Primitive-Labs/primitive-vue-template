@@ -31,7 +31,7 @@
     "clsx": "^2.1.1",
     "embla-carousel-autoplay": "^8.6.0",
     "embla-carousel-vue": "^8.6.0",
-    "js-bao": "^0.4.2",
+    "js-bao": "^0.5.0",
     "js-bao-wss-client": "^1.4.5",
     "lodash.debounce": "^4.0.8",
     "lucide-vue-next": "^1.0.0",

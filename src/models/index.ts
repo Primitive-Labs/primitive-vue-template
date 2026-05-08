@@ -42,4 +42,6 @@ for (const schemaName of Object.keys(_schemasByName)) {
   }
 }
 
-export const allModels: unknown[] = _modelPairs.map((m) => m.class);
+export const allModels: Array<typeof BaseModel> = _modelPairs.map(
+  (m) => m.class
+);
