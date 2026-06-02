@@ -681,8 +681,8 @@ onUnmounted(() => {
                   rel="noopener noreferrer"
                   class="underline underline-offset-2 hover:text-primary"
                 >
-                  Primitive Console </a
-                >
+                  Primitive Console
+                </a>
                 (or via <code>primitive apps update</code>).
               </p>
             </div>
