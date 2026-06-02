@@ -184,6 +184,17 @@ export const useUserStore = defineStore("user", () => {
    */
   const authConfig = ref<AuthConfig | null>(null);
 
+  /**
+   * Set when {@link loadAuthConfig} fails to fetch the auth configuration
+   * (e.g. the server is unreachable, or this app's origin / redirect URI is
+   * not registered for the app server-side and gets rejected by CORS).
+   *
+   * When this is non-null, `authConfig` is null and no sign-in methods can be
+   * shown, so login pages should surface this message instead of rendering a
+   * blank form.
+   */
+  const authConfigError = ref<string | null>(null);
+
   const userPrefs = ref<UserPrefsMap>({});
 
   /**
@@ -374,6 +385,7 @@ export const useUserStore = defineStore("user", () => {
     if (authConfig.value !== null) return;
     if (authConfigPromise) return authConfigPromise;
     const cfgLogger = logger.forScope("loadAuthConfig");
+    authConfigError.value = null;
     authConfigPromise = (async () => {
       try {
         const client = await jsBaoClientService.getClientAsync();
@@ -394,6 +406,12 @@ export const useUserStore = defineStore("user", () => {
         cfgLogger.debug("Auth config loaded:", authConfig.value);
       } catch (e: unknown) {
         cfgLogger.warn("Failed to fetch auth config:", e);
+        // Surface the failure so login pages can show a clear message instead
+        // of a blank form. The most common cause in development is a config
+        // mismatch: this app's origin / redirect URI is not registered for the
+        // app server-side, so the server rejects the request via CORS.
+        authConfigError.value =
+          "We couldn't load sign-in options from the Primitive server. The request was blocked or failed — most often because the address this app is served from isn't listed in this Primitive app's CORS Allowed Origins on the server.";
         authConfigPromise = null;
       }
     })();
@@ -1304,6 +1322,7 @@ export const useUserStore = defineStore("user", () => {
       membershipsPromise = null;
       authConfigPromise = null;
       authConfig.value = null;
+      authConfigError.value = null;
       prefsReadyPromise = null;
       cleanupPrefs();
 
@@ -1588,6 +1607,7 @@ export const useUserStore = defineStore("user", () => {
     isOnline,
     isInitialized,
     authConfig,
+    authConfigError,
 
     // getters
     isAdmin,

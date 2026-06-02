@@ -165,6 +165,30 @@ const showGoogleButton = computed(() => {
   return authConfig.value?.hasOAuth ?? false;
 });
 
+/**
+ * Set when the auth config failed to load (e.g. server unreachable, or this
+ * app's origin / redirect URI is not registered for the app server-side and
+ * the request is rejected by CORS). When set, no sign-in methods are available.
+ */
+const authConfigError = computed(() => user.authConfigError);
+
+// The origin this app is served from. The browser sends this as the CORS
+// `Origin` header on every request to the Primitive server, and the server
+// only accepts origins listed in the app's CORS Allowed Origins setting. A
+// blocked auth-config request almost always means this origin isn't allowed.
+const appOrigin = computed(() => {
+  try {
+    return window.location.origin;
+  } catch {
+    return "";
+  }
+});
+
+// The redirect URI this app is configured with locally (VITE_OAUTH_REDIRECT_URI).
+const configuredRedirectUri = computed(
+  () => jsBaoClientService.getConfig()?.oauthRedirectUri ?? null
+);
+
 const showDivider = computed(() => {
   // Show divider if both email form and Google are available
   return showEmailForm.value && showGoogleButton.value;
@@ -604,6 +628,64 @@ onUnmounted(() => {
             <h1 class="text-2xl font-semibold tracking-tight">
               Sign in to {{ props.appName }}
             </h1>
+          </div>
+
+          <!-- Auth config failed to load — the request to the Primitive server
+               was blocked, almost always because this app's address isn't in
+               the app's CORS "Allowed Origins" on the server. CORS origins and
+               OAuth redirect URIs are *separate* server settings; both must
+               match how this app is actually served. -->
+          <div
+            v-if="authConfigError"
+            class="rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm space-y-3"
+          >
+            <p class="font-medium text-destructive">Sign-in is unavailable</p>
+            <p class="text-muted-foreground">
+              {{ authConfigError }}
+            </p>
+
+            <!-- What this running app is using (local) -->
+            <div class="space-y-1 text-xs text-muted-foreground">
+              <p class="font-medium text-foreground">This app (local)</p>
+              <p class="flex flex-wrap gap-x-1">
+                <span class="font-medium">Served from (CORS origin):</span>
+                <code class="break-all">{{ appOrigin }}</code>
+              </p>
+              <p v-if="configuredRedirectUri" class="flex flex-wrap gap-x-1">
+                <span class="font-medium">VITE_OAUTH_REDIRECT_URI:</span>
+                <code class="break-all">{{ configuredRedirectUri }}</code>
+              </p>
+            </div>
+
+            <!-- Separate server settings that must match (can't be read here —
+                 the request to fetch them was blocked by the same CORS rule) -->
+            <div class="space-y-1 text-xs text-muted-foreground">
+              <p class="font-medium text-foreground">
+                Primitive app (server) — these must match
+              </p>
+              <ul class="list-disc space-y-1 pl-4">
+                <li>
+                  <span class="font-medium">CORS Allowed Origins</span> must
+                  include <code class="break-all">{{ appOrigin }}</code>
+                </li>
+                <li>
+                  <span class="font-medium">Redirect URIs</span> must include
+                  your <code>VITE_OAUTH_REDIRECT_URI</code>
+                </li>
+              </ul>
+              <p>
+                These are separate settings. Update them in the
+                <a
+                  href="https://admin.primitiveapi.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="underline underline-offset-2 hover:text-primary"
+                >
+                  Primitive Console </a
+                >
+                (or via <code>primitive apps update</code>).
+              </p>
+            </div>
           </div>
 
           <!-- Invite-only notice -->
