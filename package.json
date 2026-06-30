@@ -19,7 +19,7 @@
     "format:check": "prettier --check src/",
     "format": "prettier --write src/",
     "cf-deploy": "node scripts/deploy.mjs",
-    "codegen": "npx js-bao-codegen-v2 -i src/models/models.toml -o src/models && pnpm format"
+    "codegen": "npx js-bao-codegen-v2 -i src/models/models.toml -o src/models && (! ls .primitive/sync/*/*/database-types/*.toml >/dev/null 2>&1 || primitive databases codegen -o src/types/generated) && pnpm format"
   },
   "dependencies": {
     "@lucide/vue": "^1.22.0",
