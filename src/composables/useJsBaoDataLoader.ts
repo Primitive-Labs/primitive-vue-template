@@ -69,6 +69,14 @@ export interface UseJsBaoDataLoaderOptions<
   debounceMs?: number;
 
   /**
+   * Delay (ms) before `showSkeleton` flips to `true` while data is still
+   * loading. If the load completes before this delay, the skeleton never
+   * shows — useful to avoid skeleton flashes on warm SPA navigations where
+   * document queries resolve in a few milliseconds. Defaults to 100ms.
+   */
+  skeletonDelayMs?: number;
+
+  /**
    * Optional error handler.
    */
   onError?: (error: unknown) => void;
@@ -85,6 +93,14 @@ export interface UseJsBaoDataLoaderResult<Data> {
    * is `true`. Reset back to `false` whenever `documentReady` becomes `false`.
    */
   initialDataLoaded: Ref<boolean>;
+
+  /**
+   * Becomes `true` only after `skeletonDelayMs` has elapsed without a
+   * successful load. Use this to gate skeletons — it suppresses the brief
+   * skeleton flash on fast warm-cache loads. Resets when data loads or
+   * when `documentReady` becomes `false`.
+   */
+  showSkeleton: Ref<boolean>;
 
   /**
    * Manually schedule a reload (subject to debounce, readiness, and pause).
@@ -145,14 +161,51 @@ export function useJsBaoDataLoader<
     pauseUpdates,
     reloadOnDocumentEvents = true,
     debounceMs = 50,
+    skeletonDelayMs = 100,
     onError,
   } = options;
 
   const data = ref(null) as Ref<Data | null>;
   const initialDataLoaded = ref(false);
+  // True once the skeleton-delay timer fires while a load is in flight. Only
+  // relevant after the document is ready; see `showSkeleton` below.
+  const skeletonDelayElapsed = ref(false);
   const subscriptionsEnabled = ref(false);
 
+  let skeletonTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const armSkeletonTimer = (): void => {
+    if (skeletonTimer !== null) return;
+    if (initialDataLoaded.value) return;
+    skeletonTimer = setTimeout(() => {
+      skeletonTimer = null;
+      if (!initialDataLoaded.value) skeletonDelayElapsed.value = true;
+    }, skeletonDelayMs);
+  };
+
+  const disarmSkeletonTimer = (): void => {
+    if (skeletonTimer !== null) {
+      clearTimeout(skeletonTimer);
+      skeletonTimer = null;
+    }
+    skeletonDelayElapsed.value = false;
+  };
+
   const isReady = computed(() => toBoolean(documentReady, false));
+
+  // Whether consumers should render a loading skeleton. This owns the full
+  // loading model so templates can just check `showSkeleton`:
+  //  - loaded             → never show
+  //  - document opening   → show immediately (the dominant initial-load wait,
+  //                         which the delay timer does not cover because no
+  //                         load runs until the document is ready)
+  //  - doc ready, loading → show only after the delay timer fires, so fast
+  //                         warm reloads don't flash a skeleton
+  const showSkeleton = computed(() => {
+    if (initialDataLoaded.value) return false;
+    if (!isReady.value) return true;
+    return skeletonDelayElapsed.value;
+  });
   const isPaused = computed(() => toBoolean(pauseUpdates, false));
 
   const queryValue = computed<Q | null>(
@@ -184,6 +237,7 @@ export function useJsBaoDataLoader<
       reason,
       queryParams: toRaw(queryValue.value),
     });
+    if (!initialDataLoaded.value) armSkeletonTimer();
     try {
       const result = await loadData(queryValue.value);
       data.value = result as Data;
@@ -191,6 +245,7 @@ export function useJsBaoDataLoader<
         initialDataLoaded.value = true;
         subscriptionsEnabled.value = true;
       }
+      disarmSkeletonTimer();
       logger.debug("loadData success", {
         reason,
         queryParams: toRaw(queryValue.value),
@@ -274,6 +329,7 @@ export function useJsBaoDataLoader<
   });
 
   onUnmounted(() => {
+    disarmSkeletonTimer();
     for (const unsubscribe of unsubscribeFns) {
       try {
         unsubscribe();
@@ -290,6 +346,7 @@ export function useJsBaoDataLoader<
         logger.debug("documentReady became false; resetting state");
         initialDataLoaded.value = false;
         subscriptionsEnabled.value = false;
+        disarmSkeletonTimer();
         return;
       }
 
@@ -330,6 +387,7 @@ export function useJsBaoDataLoader<
   return {
     data,
     initialDataLoaded,
+    showSkeleton,
     reload,
   };
 }
