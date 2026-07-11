@@ -179,6 +179,11 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
   or re-run per shard.
 - A test file that fails to load (import error, wrong default export) surfaces
   as a failing test — never a silent skip.
+- A test that needs browser APIs (canvas, MediaRecorder, …) should declare
+  `environment: "browser"` on the test — or on the whole `TestGroup` — so the
+  headless run reports it as skipped instead of failing. Node-only tests can
+  symmetrically declare `environment: "node"` and the browser panel skips
+  them. Tests without the flag run in both contexts.
 
 ## Configuration: `.env` Files
 
