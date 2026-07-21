@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 
 src/models/generated/
+
+# Primitive CLI local state (per-env tokens, sync backups/snapshots)
+.primitive/credentials.json
+.primitive/sync-backups/
+.primitive/sync/**/.snapshots/

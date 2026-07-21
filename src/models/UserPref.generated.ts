@@ -15,4 +15,4 @@ export interface UserPref extends UserPrefAttrs, BaseModel {}
 
 export class UserPref extends BaseModelImpl {}
 
-export const UserPref_modelName: "user_prefs" = "user_prefs";
+export const UserPref_modelName = "user_prefs" as const;

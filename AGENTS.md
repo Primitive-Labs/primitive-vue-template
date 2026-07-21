@@ -34,3 +34,9 @@
 - ALWAYS refer to the Primitive CLI guides before writing code that uses js-bao, js-bao-wss-client, or primitive-app. Run `primitive guides list` to see available topics and `primitive guides get <topic>` to retrieve a specific guide.
 - If using Claude Code, the `primitive-platform` skill automates this workflow. It fetches the relevant guides and validates your code against them. Install it into the user's list of skills with `primitive skill install`.
 - If using Claude Code in this project, make sure the primitive-platform skill is loaded into your context before starting work.
+
+### Workflow Codegen
+
+- Typed workflow invokers are generated from the `workflows/*.toml` schemas in the sync directory (`.primitive/sync/<env>/<appId>/workflows/`). `pnpm codegen` regenerates them into `src/types/generated/workflows/` whenever any workflow TOMLs exist.
+- Each generated file exports `<Key>Input`/`<Key>Output` types and a `<key>(client)` factory with typed `runSync`/`start` methods — ALWAYS call workflows through these factories instead of raw `client.workflows.start`/`runSync` with a string key. (`runSync` is only emitted for `syncCallable = true` workflows.)
+- NEVER edit `*.generated.ts` files in `src/types/generated/`.

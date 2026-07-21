@@ -30,7 +30,7 @@ export default defineConfigWithVueTs(
   // and the files are generated from `models.toml`, so silence the generic
   // warning for those files only.
   {
-    name: "primitive-app-template/generated-models",
+    name: "primitive-vue-template/generated-models",
     files: ["src/models/*.generated.ts"],
     rules: {
       "@typescript-eslint/no-unsafe-declaration-merging": "off",
@@ -42,7 +42,7 @@ export default defineConfigWithVueTs(
   // with intentionally single-word names (Button, Card, …). Renaming them
   // would diverge from upstream, so exempt them from the multi-word rule.
   {
-    name: "primitive-app-template/shadcn-ui-components",
+    name: "primitive-vue-template/shadcn-ui-components",
     files: ["src/components/ui/**/*.vue"],
     rules: {
       "vue/multi-word-component-names": "off",

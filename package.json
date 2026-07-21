@@ -1,5 +1,5 @@
 {
-  "name": "primitive-app-template",
+  "name": "primitive-vue-template",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "format:check": "prettier --check src/",
     "format": "prettier --write src/",
     "cf-deploy": "node scripts/deploy.mjs",
-    "codegen": "npx js-bao-codegen-v2 -i src/models/models.toml -o src/models && (! ls .primitive/sync/*/*/database-types/*.toml >/dev/null 2>&1 || primitive databases codegen -o src/types/generated) && pnpm format"
+    "codegen": "npx js-bao-codegen-v2 -i src/models/models.toml -o src/models && (! ls .primitive/sync/*/*/database-types/*.toml >/dev/null 2>&1 || primitive databases codegen -o src/types/generated) && (! ls .primitive/sync/*/*/workflows/*.toml >/dev/null 2>&1 || primitive workflows codegen -o src/types/generated/workflows) && pnpm format"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",
@@ -33,10 +33,10 @@
     "embla-carousel-autoplay": "^8.6.0",
     "embla-carousel-vue": "^8.6.0",
     "js-bao": "^0.5.1",
-    "js-bao-wss-client": "^2.0.4",
+    "js-bao-wss-client": "^2.0.10",
     "lodash.debounce": "^4.0.8",
     "pinia": "^3.0.4",
-    "primitive-app": "^3.0.5",
+    "primitive-app": "^3.0.9",
     "reka-ui": "^2.10.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.2",
@@ -46,6 +46,7 @@
     "yjs": "^13.6.31"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260710.1",
     "@tsconfig/node22": "^22.0.5",
     "@types/lodash.debounce": "^4.0.9",
     "@types/node": "^26.1.1",
@@ -59,7 +60,7 @@
     "jiti": "^2.7.0",
     "npm-run-all2": "^9.0.2",
     "prettier": "3.9.5",
-    "primitive-admin": "^1.0.53",
+    "primitive-admin": "^1.0.59",
     "shadcn-vue": "^2.7.4",
     "typescript": "~6.0.3",
     "vite": "^8.1.4",

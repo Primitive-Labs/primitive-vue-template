@@ -105,10 +105,10 @@ const documentLifecycleTests: TestGroup = {
           }
 
           // Confirm it round-trips from the server-side blob list.
-          const listed = await client.documents.blobs(doc.docId).list();
-          const found = listed.items.some(
-            (b: { blobId?: string }) => b.blobId === result.blobId
-          );
+          const listed = await client.documents
+            .blobs(doc.docId)
+            .list<{ blobId?: string }>();
+          const found = listed.items.some((b) => b.blobId === result.blobId);
           if (!found) {
             throw new Error(
               `Uploaded blob ${result.blobId} not found in the document's blob list`

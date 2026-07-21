@@ -2,7 +2,7 @@
 
 A production-ready Vue starter built on the Primitive platform. Ships Vue 3 + TypeScript + Vite + Tailwind 4 + shadcn-vue + Pinia + vue-router, wired to the Primitive client libraries (`primitive-app`, `js-bao`, `js-bao-wss-client`) with auth, layouts, theming, and a Cloudflare Workers deploy already in place.
 
-For platform concepts and API reference (auth flows, models, sharing, collections, workflows, prompts, integrations, etc.), see the **Primitive Docs**: https://primitive-labs.github.io/primitive-docs/ — or use the CLI (see below).
+For platform concepts and API reference (auth flows, models, sharing, collections, workflows, prompts, integrations, etc.), see the **Primitive Docs**: https://primitive-labs.github.io/primitive-docs-site/ — or use the CLI (see below).
 
 ## Install the Primitive CLI
 
