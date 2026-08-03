@@ -24,6 +24,15 @@ export default defineConfig(({ mode }) => {
         keyboardShortcut: "cmd+shift+l",
       }),
     ],
+    build: {
+      // The Primitive client + Vue runtime baseline is ~1.1 MB minified
+      // (~300 kB gzip), so Vite's generic 500 kB chunk advisory always fires
+      // on a fresh scaffold. Calibrate the threshold just above that baseline
+      // — the advisory stays useful for real app-side bloat. As your app
+      // grows, prefer code-splitting (dynamic import() per route) over
+      // raising this further.
+      chunkSizeWarningLimit: 1200,
+    },
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),

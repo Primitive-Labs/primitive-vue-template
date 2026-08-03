@@ -258,6 +258,140 @@ primitive apps create "Name"       # Create an app (does NOT auto-bind to an env
                                    # edit .primitive/config.json or use `env add` to bind)
 ```
 
+## Debugging and inspection
+
+The CLI is the reference surface for inspecting a running app — reading what
+happened without opening the admin UI. The inspection commands share one set of
+conventions so they behave predictably across resources.
+
+```bash
+# Workflow runs (the reference tailing command)
+primitive workflows runs list <workflow-id>            # recent runs
+primitive workflows runs list <workflow-id> --json     # normalized inspection items
+primitive workflows runs list <workflow-id> --watch    # re-render the list every 2s (snapshot)
+primitive workflows runs list <workflow-id> --follow   # append runs as they start or change (tail)
+primitive workflows runs list --user-id <user-id>      # one user's runs, across every workflow
+primitive workflows runs steps <workflow-id> <run-id>  # every step run of one run
+primitive workflows runs status <workflow-id> <run-id> # one run's status + step results
+
+# The other log-shaped views
+primitive integrations logs <integration-id>           # outbound calls: status, timing, actor
+primitive webhooks events <webhook-id>                 # inbound deliveries and how they were handled
+primitive analytics events                             # app activity events
+
+# Blob storage
+primitive blob-buckets list                            # buckets in the app (app-scoped: no selector)
+primitive blob-buckets head <bucket> <key>             # object metadata without downloading
+
+# Live connections and sessions
+primitive connections list --user <id>                 # active WebSocket connections
+primitive sessions list --user <id>                    # auth sessions
+
+# Database records and app documents
+primitive databases records query <database> ...       # read records
+primitive documents export <document-id>               # dump a document's contents
+
+# Metadata
+primitive metadata get <type> <id> <category>          # resource metadata
+```
+
+**Uniform flags across every inspection command:**
+
+- `--app <id>` — target app (falls back to the resolved env's app).
+- `--json` — the output you parse in scripts. Most commands print the endpoint
+  payload as-is; the log views below normalize theirs into the shared item
+  shape. Either way it is a JSON document, never a bare array.
+- `--limit <n>` / `--cursor <c>` — paged reads. The response envelope is always
+  `{ items, hasMore, nextCursor? }` (`cursor` is a deprecated alias of
+  `nextCursor` kept for one window). Aggregate reads walk the `nextCursor` chain.
+- `list` always requires a **selector** (`--user`, `--owner`, a resource id, …) so
+  it never enumerates the whole app — **except** genuinely app-scoped resources
+  like `blob-buckets list`, which lists the app's buckets directly.
+
+**One `--json` item shape across the log views.** `workflows runs list`,
+`workflows runs steps`, `integrations logs`, `webhooks events` and `analytics
+events` all emit the same item envelope inside their endpoint's pagination
+envelope — never a bare array:
+
+```json
+{
+  "items": [
+    {
+      "source": "workflow-run",
+      "timestamp": "2026-07-24T18:03:11.204Z",
+      "outcome": "error",
+      "nativeStatus": "failed",
+      "correlation": { "runId": "01J…", "workflowId": "01J…", "userId": "01J…" },
+      "detail": { "workflowKey": "summarize", "errorMessage": "…" }
+    }
+  ],
+  "hasMore": false
+}
+```
+
+- `source` is the discriminator: `workflow-run`, `workflow-step`,
+  `integration`, `webhook`, `activity`.
+- `outcome` is the normalized verdict — `ok`, `error`, `pending`, or `neutral`
+  — and `nativeStatus` keeps the source's own value (an HTTP integer, `failed`,
+  `duplicate`, …) verbatim, so filtering on the raw value stays possible. A
+  webhook that was accepted but matched no active workflow is `ok` with
+  `nativeStatus: "workflow_not_active"` — a non-dispatch, not a failure.
+- `correlation` carries the pivot keys that let you follow one operation
+  between views (`runId`, `stepId`, `traceId`, `workflowId`, `webhookId`,
+  `userId`) plus the row's own id (`stepRunId`, `eventId`), so a row you
+  printed can always be looked up again.
+- `detail` is a per-source allowlist of operator-facing fields, not the whole
+  stored record.
+- Pagination rides alongside `items`: `hasMore` plus `nextCursor` where the
+  endpoint pages by cursor, `page`/`pageSize`/`totalRows` for `analytics
+  events`. `integrations logs` returns `{ items }` — it filters within a
+  bounded scan rather than paging.
+- The normalization is `--json`-only: the human tables stay per-view because
+  each shows columns the shared shape has no room for (queue delay, inter-step
+  gap, token counts, event id). `--watch --json` reprints the same envelope
+  each tick; `--follow --json` emits one item per line (newline-delimited
+  JSON), since a tail has no closing bracket to wait for.
+
+**Per-user inspection.** Two views can be keyed on a user:
+
+```bash
+primitive workflows runs list --user-id <user-id>   # every run that user started
+primitive analytics events --user-id <user-id>      # that user's activity events
+```
+
+`workflows runs list --user-id` makes `<workflow-id>` optional — it lists the
+user's runs across every workflow. Pass both to narrow to one workflow.
+`integrations logs` and `webhooks events` have no `--user-id`: an integration
+invocation records the actor but is indexed by integration, and a webhook event
+carries no user identity at all. To follow a user through those, take the
+`runId`/`traceId` from that user's workflow runs and match it in the
+integration logs.
+
+**`--watch` vs `--follow` (both poll — there is no server push):**
+
+- `--watch` re-fetches the current snapshot each interval and re-renders the whole
+  view (a periodic re-`list`/`get`). It works on any list command with no server
+  change.
+- `--follow` tails: it appends new/changed rows since a server-owned checkpoint,
+  like `tail -f`. It is offered **only** where the endpoint supports the resume
+  contract (today: `workflows runs list`); other commands offer only `--watch`
+  until their endpoint adds it. Passing `--follow` where it isn't supported fails
+  with a clear message.
+- `--interval <seconds>` sets the poll interval (minimum 1s, default 2s).
+- `--watch` and `--follow` are mutually exclusive.
+- `--json --follow` emits **NDJSON** (one JSON object per new row per line) — a
+  tail is an unbounded stream, so it can't be one array; pipe it to `jq -c`.
+  `--json --watch` emits one array per redraw.
+- Ctrl-C stops a tail cleanly (exit 0).
+
+**`--follow` shows the latest observed version of a row, not every state change.**
+It re-emits a run when a newer version is observed between polls, so a run you
+already saw can reappear at its new position after its status changes — that is
+expected, not a duplicate. Fast transitions that happen between two polls collapse
+to the latest stored version. This is near-lossless observed-version tailing:
+rows sharing a timestamp, or a delayed index update, can occasionally be skipped
+or re-shown. Use it to watch activity, not as an exactly-once event log.
+
 ## When the User is Starting a New Feature
 
 If the user describes a new feature they want to build:
