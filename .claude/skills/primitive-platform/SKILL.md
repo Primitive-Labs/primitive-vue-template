@@ -284,11 +284,15 @@ primitive blob-buckets list                            # buckets in the app (app
 primitive blob-buckets head <bucket> <key>             # object metadata without downloading
 
 # Live connections and sessions
-primitive connections list --user <id>                 # active WebSocket connections
-primitive sessions list --user <id>                    # auth sessions
+primitive connections list --user-id <id>              # active WebSocket connections
+primitive sessions list --user-id <id>                 # auth sessions
 
 # Database records and app documents
 primitive databases records query <database> ...       # read records
+primitive databases records get <database> <model-name> <record-id>
+primitive documents records query <document> <model-name> [--filter '{...}']
+primitive documents records get <document> <model-name> <record-id>
+primitive documents dump <document-id>                 # every model's records as JSON
 primitive documents export <document-id>               # dump a document's contents
 
 # Metadata
@@ -300,13 +304,21 @@ primitive metadata get <type> <id> <category>          # resource metadata
 - `--app <id>` — target app (falls back to the resolved env's app).
 - `--json` — the output you parse in scripts. Most commands print the endpoint
   payload as-is; the log views below normalize theirs into the shared item
-  shape. Either way it is a JSON document, never a bare array.
+  shape. Either way it is a JSON document, never a bare array. Data goes to
+  stdout; status, warnings and the `CLI Version: …` banner go to stderr — so
+  even the always-JSON commands that take no `--json` flag pipe cleanly
+  (`primitive documents dump <doc> | jq .`).
 - `--limit <n>` / `--cursor <c>` — paged reads. The response envelope is always
-  `{ items, hasMore, nextCursor? }` (`cursor` is a deprecated alias of
-  `nextCursor` kept for one window). Aggregate reads walk the `nextCursor` chain.
-- `list` always requires a **selector** (`--user`, `--owner`, a resource id, …) so
-  it never enumerates the whole app — **except** genuinely app-scoped resources
-  like `blob-buckets list`, which lists the app's buckets directly.
+  `{ items, hasMore, nextCursor? }`. Both `records query` verbs print that
+  envelope whatever shape their endpoint returns, and neither emits the
+  deprecated `cursor` alias — read `nextCursor`. Aggregate reads walk the
+  `nextCursor` chain.
+- `list` always requires a **selector** (`--user-id`, `--owner`, a resource id, …)
+  so it never enumerates the whole app — **except** genuinely app-scoped
+  resources like `blob-buckets list`, which lists the app's buckets directly.
+  `--user-id` is the spelling on every list/inspection selector; `connections
+  list`, `sessions list` and `tokens list` still accept `--user` as a
+  deprecated alias that prints a notice on stderr.
 
 **One `--json` item shape across the log views.** `workflows runs list`,
 `workflows runs steps`, `integrations logs`, `webhooks events` and `analytics

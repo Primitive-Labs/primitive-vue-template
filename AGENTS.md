@@ -26,7 +26,7 @@
 
 ## Using the Primitive Platform
 
-- The Primitive CLI (`primitive-admin` on npm) is required for working with the Primitive platform. Install it globally with `npm install -g primitive-admin`, then authenticate with `primitive login`.
+- The Primitive CLI (`primitive-admin` on npm) is required for working with the Primitive platform. Install it globally with `pnpm add -g primitive-admin` (or `npm install -g primitive-admin` if you use npm — pick one manager, not both), then authenticate with `primitive login`.
 - This project uses **project mode**: a checked-in `.primitive/config.json` defines named environments (e.g. `dev`, `prod`), each binding an `apiUrl` and (optionally) an `appId` so "which server" and "which app" travel together. Per-environment tokens live in `.primitive/credentials.json` (gitignored).
 - If `.primitive/config.json` does not yet exist, create the first environment with `primitive env add dev --api-url <url> --app-id <appId>` (this auto-creates the config file). Repeat with different names (e.g. `prod`) to add more environments. Use `primitive env use <name>` to set the project's `defaultEnvironment`.
 - The active environment is resolved by precedence: `--env <name>` flag → `PRIMITIVE_ENV` env var → `defaultEnvironment` in config → the only env if exactly one is defined → otherwise error. There is no global "active app" in project mode — `primitive use` is a no-op when the env already pins an `appId`; switch apps by editing the config or passing `--env`/`--app`.

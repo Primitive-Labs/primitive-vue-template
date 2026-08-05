@@ -9,7 +9,7 @@ For platform concepts and API reference (auth flows, models, sharing, collection
 The Primitive CLI (`primitive-admin`) is required for app setup, OAuth/origin configuration, and on-demand documentation. Install once, globally:
 
 ```bash
-npm install -g primitive-admin
+pnpm add -g primitive-admin   # or: npm install -g primitive-admin
 primitive login
 primitive use "<Your App Name>"
 primitive whoami    # confirm app + server endpoint
