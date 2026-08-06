@@ -159,6 +159,20 @@ document/model lifecycle natively in Node.
 PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test
 ```
 
+To run against another environment, pass vitest's `--mode` and keep a matching
+`.env.<mode>` file — **without a `--` separator**:
+
+```bash
+PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test --mode staging
+```
+
+> `pnpm test -- --mode staging` does **not** work. vitest discards every argument
+> after a bare `--`, so the mode flag (and any positional test filter) is
+> dropped and the run silently loads the default `.env` — the suite passes
+> green against the wrong backend and writes test data there. Log
+> `import.meta.env.MODE` and `import.meta.env.VITE_API_URL` from a test if you
+> need to confirm which environment a run used.
+
 For CI systems that consume JUnit output:
 
 ```bash
@@ -169,7 +183,8 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
 
 - App IDs and server URLs come from `.env` (`VITE_APP_ID`, `VITE_API_URL`,
   `VITE_WS_URL`) via `src/tests/primitive-tests.spec.ts`; override per run
-  with vitest `--mode` and the matching `.env.<mode>` file.
+  with vitest `--mode` and the matching `.env.<mode>` file. Pass the flag
+  directly (`pnpm test --mode staging`) — see the warning above.
 - Tests that return a score (`"passed/total (pct%)"`) fail the run when below
   a full score, so parity-style suites actually gate CI. The browser panel
   shows the same result as "scored" without failing.

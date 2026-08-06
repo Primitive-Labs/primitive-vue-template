@@ -27,13 +27,10 @@
 ## Using the Primitive Platform
 
 - The Primitive CLI (`primitive-admin` on npm) is required for working with the Primitive platform. Install it globally with `pnpm add -g primitive-admin` (or `npm install -g primitive-admin` if you use npm — pick one manager, not both), then authenticate with `primitive login`.
-- This project uses **project mode**: a checked-in `.primitive/config.json` defines named environments (e.g. `dev`, `prod`), each binding an `apiUrl` and (optionally) an `appId` so "which server" and "which app" travel together. Per-environment tokens live in `.primitive/credentials.json` (gitignored).
-- If `.primitive/config.json` does not yet exist, create the first environment with `primitive env add dev --api-url <url> --app-id <appId>` (this auto-creates the config file). Repeat with different names (e.g. `prod`) to add more environments. Use `primitive env use <name>` to set the project's `defaultEnvironment`.
-- The active environment is resolved by precedence: `--env <name>` flag → `PRIMITIVE_ENV` env var → `defaultEnvironment` in config → the only env if exactly one is defined → otherwise error. There is no global "active app" in project mode — `primitive use` is a no-op when the env already pins an `appId`; switch apps by editing the config or passing `--env`/`--app`.
-- Before running any CLI commands, run `primitive whoami` to confirm the resolved environment, authenticated user, app ID, and server endpoint match the current project. Use `primitive env list` and `primitive env show [name]` to inspect, and `primitive env remove <name>` to delete an env (also clears its credential slot).
-- ALWAYS refer to the Primitive CLI guides before writing code that uses js-bao, js-bao-wss-client, or primitive-app. Run `primitive guides list` to see available topics and `primitive guides get <topic>` to retrieve a specific guide.
-- If using Claude Code, the `primitive-platform` skill automates this workflow. It fetches the relevant guides and validates your code against them. Install it into the user's list of skills with `primitive skill install`.
-- If using Claude Code in this project, make sure the primitive-platform skill is loaded into your context before starting work.
+- This project uses **project mode**: a checked-in `.primitive/config.json` defines named environments (e.g. `dev`, `prod`), each binding an `apiUrl` and `appId`. Per-environment tokens live in `.primitive/credentials.json` (gitignored). `primitive init` scaffolds a `dev` environment; if the config file is missing, create it with `primitive env add dev --api-url <url> --app-id <appId>`. Select an environment with `--env <name>`, the `PRIMITIVE_ENV` env var, or `primitive env use <name>`.
+- Before running other CLI commands, run `primitive whoami` to confirm the resolved environment, authenticated user, app ID, and server endpoint match this project.
+- ALWAYS fetch the relevant guides before writing code that uses js-bao, js-bao-wss-client, or primitive-app — the guides are the source of truth for how the platform works and are updated more often than this file. Run `primitive guides list` to see available topics and `primitive guides get <topic>` to retrieve one.
+- If using Claude Code, the `primitive-platform` skill automates the guides workflow and validates your code against them. Install it with `primitive skill install`, and make sure it's loaded into your context before starting work in this project.
 
 ### Workflow Codegen
 

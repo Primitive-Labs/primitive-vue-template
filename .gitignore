@@ -4,6 +4,11 @@ node_modules/
 
 src/models/generated/
 
+# Tool state written by this app's own scripts:
+# `pnpm lint` (eslint --cache) and `pnpm cf-deploy` (wrangler)
+.eslintcache
+.wrangler/
+
 # Primitive CLI local state (per-env tokens, sync backups/snapshots)
 .primitive/credentials.json
 .primitive/sync-backups/
