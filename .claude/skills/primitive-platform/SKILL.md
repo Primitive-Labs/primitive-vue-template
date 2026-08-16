@@ -578,30 +578,45 @@ easy to reproduce on the first try:
 
 ```
 ## Repro steps
-<numbered, precise steps: exact API calls, config, versions>
+<numbered, precise, minimal: exact API calls, config, versions. The test:
+someone with no context reproduces it on the first try>
 
 ## Observed behavior
-<what actually happens, with verbatim error text>
+<what actually happens, with verbatim error text / response bodies in fenced
+blocks>
 
 ## Expected behavior
-<what should happen instead>
+<what should happen instead, stated as an observable outcome — this is what
+"fixed" means, and what a fix will be tested against>
 ```
 
+Write "Expected behavior" as the acceptance criterion: the observable outcome that
+defines the bug as fixed. If prior investigation exists (an earlier thread, a
+session's debugging), link it — don't inline a root-cause theory as fact.
+
 Labels: `type:bug` + `stage:ready-to-implement` when the repro is precise and clearly
-reproducible; otherwise `type:bug` + `stage:design`.
+reproducible; `type:bug` + `stage:research` when the root cause needs investigation
+first; `type:bug` + `stage:design` when the fix needs a real design.
 
 ### Features / enhancements / platform extensions
 
 ```
 ## Problem
-<the application-level problem being solved>
+<the application-level problem being solved, and who hits it — a concrete
+scenario, not an abstraction, and not a solution>
 
 ## What I tried
 <existing platform features attempted, and why each falls short — omit if none apply>
 
-## Ideas
-<high-level directions as bullets, not specs>
+## What a solution needs to enable
+<the outcomes a solution must make possible, as bullets — capabilities from
+the consumer's perspective, not designs>
 ```
+
+Keep "What a solution needs to enable" outcome-shaped: "an app can resume a follow
+from the last event it saw across restarts" — not "add a `resumeAfter` token to the
+list endpoint". If you have a design idea worth preserving, put it in a comment,
+clearly labeled as an idea — never in the body.
 
 Labels: `type:feature` + `stage:design`.
 
