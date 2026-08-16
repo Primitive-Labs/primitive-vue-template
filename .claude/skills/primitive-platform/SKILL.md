@@ -588,15 +588,28 @@ blocks>
 ## Expected behavior
 <what should happen instead, stated as an observable outcome — this is what
 "fixed" means, and what a fix will be tested against>
+
+## Design review needed?
+<tick any that apply; leave all unticked if the fix looks self-contained>
+
+- [ ] Involves a critical security decision (auth, permissions, CEL, secrets, webhook
+      verification, DO routing)
+- [ ] Risks a performance regression on a per-request, per-message or per-connection path
+- [ ] Requires a data model or index change (`models.yaml`)
+- [ ] Breaks an existing API contract (removes or retypes something in `openapi.json`, or
+      changes a `src/client` public signature non-additively)
 ```
 
 Write "Expected behavior" as the acceptance criterion: the observable outcome that
 defines the bug as fixed. If prior investigation exists (an earlier thread, a
 session's debugging), link it — don't inline a root-cause theory as fact.
 
-Labels: `type:bug` + `stage:ready-to-implement` when the repro is precise and clearly
-reproducible; `type:bug` + `stage:research` when the root cause needs investigation
-first; `type:bug` + `stage:design` when the fix needs a real design.
+The "Design review needed?" checkboxes decide the bug's route: any tick sends it
+through the design gate; all unticked sends it straight to implementation, with
+"Expected behavior" as the acceptance criteria. When unsure, leave a box unticked —
+the worker re-checks against its own diff and routes itself back if one applies.
+
+Labels: `type:bug` + `state:queued`.
 
 ### Features / enhancements / platform extensions
 
@@ -618,7 +631,7 @@ from the last event it saw across restarts" — not "add a `resumeAfter` token t
 list endpoint". If you have a design idea worth preserving, put it in a comment,
 clearly labeled as an idea — never in the body.
 
-Labels: `type:feature` + `stage:design`.
+Labels: `type:feature` + `state:queued`.
 
 ### Filing
 
@@ -630,15 +643,27 @@ gh issue list --repo Primitive-Labs/js-bao-wss --search "<keywords>" --state ope
   --json number,title
 ```
 
-Then create the issue with labels only — **no assignee** (triage assigns sponsors;
-unassigned is the correct starting state) and no priority labels:
+Then create the issue with labels only — one `type:*` plus `state:queued`, **no
+assignee** (triage assigns sponsors; unassigned is the correct starting state), no
+priority labels, and no `dispatch-v3` (adding that label is triage's assertion that
+the filing is complete — never the filer's):
 
 ```bash
 gh issue create --repo Primitive-Labs/js-bao-wss \
   --title "<one-line symptom or need>" \
-  --label "type:bug,stage:design" \
+  --label "type:bug,state:queued" \
   --body "<template body>"
 ```
+
+The templates above mirror the canonical ones in the js-bao-wss repo at
+`.claude/skills/_shared/templates/` (`bug-filing.md`, `feature-filing.md`,
+`docs-filing.md`), which the pipeline validates against with
+`.claude/skills/_shared/check-filing.sh` before an issue can be picked up — a body
+missing a required section stalls in triage until a human repairs it. If the
+templates here and the repo's ever disagree, the repo's win. When working inside a
+js-bao-wss checkout, don't file by hand at all: use that repo's `/file-issue` skill,
+which interviews for the sections, validates the draft offline, and files with the
+right labels.
 
 ### Follow-up comments on existing issues
 
