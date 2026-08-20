@@ -6,8 +6,9 @@
  * so `pnpm test` can gate CI without a browser.
  *
  * Prerequisites (see README "Running harness tests headlessly"):
- *   - PRIMITIVE_TEST_EMAIL set to an email covered by the app's
- *     testAccountBaseEmails whitelist.
+ *   - PRIMITIVE_TEST_EMAIL set to a +primitivetest derivative of a base on
+ *     the app's testAccountBaseEmails whitelist — the bare base itself is
+ *     never a test account and always fails sign-in.
  *   - `ws` installed (WebSocket implementation for Node).
  */
 import { registerPrimitiveTests } from "primitive-app/testing";

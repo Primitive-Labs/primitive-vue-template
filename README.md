@@ -146,9 +146,11 @@ document/model lifecycle natively in Node.
    ```
 
    Then any `you+primitivetest-<suffix>@yourdomain.com` address signs in with
-   code `000000` and auto-provisions a test user. Use a **stable suffix** per
-   CI project (e.g. `you+primitivetest-ci@yourdomain.com`) so runs reuse one
-   test user instead of creating new ones.
+   code `000000` and auto-provisions a test user — the bare base address
+   (`you@yourdomain.com`) is never a test account and always fails sign-in.
+   Use a **stable suffix** per CI project (e.g.
+   `you+primitivetest-ci@yourdomain.com`) so runs reuse one test user instead
+   of creating new ones.
 
 2. **`ws`** must be installed (it is a devDependency of this template) — the
    js-bao client needs it for WebSockets in Node.

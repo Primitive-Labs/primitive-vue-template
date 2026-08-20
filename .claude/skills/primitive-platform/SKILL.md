@@ -4,7 +4,7 @@ description: >
   Expert guide for building applications on the Primitive platform. MUST be used whenever the user
   is writing code that uses js-bao, js-bao-wss-client, primitive-app components, or any Primitive
   platform feature (documents, databases, workflows, prompts, integrations, blobs, authentication,
-  users/groups). Also trigger whenever about to run any `primitive` CLI command (e.g., primitive sync, primitive integrations, primitive apps, primitive env) to ensure Step 0 CLI verification is performed first. After writing or modifying code that touches Primitive
+  users/groups). Also trigger whenever about to run any `primitive` CLI command (e.g., primitive config, primitive integrations, primitive apps, primitive env) to ensure Step 0 CLI verification is performed first. After writing or modifying code that touches Primitive
   APIs, this skill cross-references the implementation against official guides and automatically
   corrects common mistakes. Use this skill even if the user doesn't explicitly ask for it —
   any Primitive-related code should be validated against current best practices. Also use it
@@ -109,7 +109,7 @@ dependencies.
 
 **Only fall back to global state if the user explicitly declines project setup** after you've
 recommended it. Even then, name the exact server/app the command will hit and get clear
-confirmation before running anything mutating (`primitive sync push`, `primitive apps create`, etc.).
+confirmation before running anything mutating (`primitive config push`, `primitive apps create`, etc.).
 A read-only command (`whoami`, `guides list`) against global state is fine while you're still
 working out the config.
 
@@ -117,7 +117,7 @@ Do not rely on `.env` files like `PRIMITIVE_API_URL` to control CLI targeting �
 read by the CLI in project mode, and the project config is the source of truth.
 
 **Why this matters:** If the CLI is pointed at the wrong environment (e.g., prod instead of dev),
-commands like `primitive sync push` will modify the wrong server. Silent fallback to global state
+commands like `primitive config push` will modify the wrong server. Silent fallback to global state
 makes this exact mistake easy to commit. Setting up project config is the durable fix — verify and
 surface before running mutating operations.
 
@@ -166,7 +166,7 @@ guides. The guides contain:
 - Complete API documentation with method signatures
 - Working code examples in the requested language (e.g. TypeScript or Swift)
 - Common patterns and anti-patterns
-- Configuration examples (TOML files for `primitive sync`)
+- Configuration examples (TOML files for `primitive config`)
 - Decision frameworks for architecture choices
 
 **Do not guess or assume API patterns.** If you're unsure about a method signature, parameter,
@@ -177,8 +177,8 @@ or pattern, fetch the guide. The guides are comprehensive and authoritative.
 When writing Primitive code:
 
 1. **Follow the patterns from the fetched guides exactly** — method names, argument order, lifecycle patterns
-2. **Use `primitive sync`** for all backend configuration (workflows, prompts, integrations, databases)
-3. **Configuration lives in TOML files** in version control, pushed via `primitive sync push`
+2. **Use `primitive config`** for all backend configuration (workflows, prompts, integrations, databases)
+3. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name)
 4. **Run `pnpm codegen`** after creating or modifying js-bao models
 
 ## Step 4: Post-Code Review (Automatic)
@@ -204,14 +204,15 @@ Compare the written code against the guide content:
 - **Lifecycle management** — Are documents opened before queries? Is auth checked first?
 - **Access control** — Are CEL expressions or permissions configured properly?
 - **Anti-patterns** — Does the code do anything the guide explicitly warns against?
-- **Missing steps** — Does the code need `pnpm codegen`, `primitive sync push`, or other follow-up?
+- **Untyped workflow invocation** — Is `client.workflows.start`/`runSync` called with a string-literal `workflowKey` and a hand-typed/cast `input`/`output` (e.g. `result.output as {...}`) instead of a generated invoker? That's a finding whenever the workflow has an `inputSchema`/`outputSchema` to generate from — regenerate with `primitive workflows codegen` (`--lang swift` for iOS/macOS) and call through the factory it emits instead, per the workflows guide's "Typed invocation (codegen)" section.
+- **Missing steps** — Does the code need `pnpm codegen`, `primitive workflows codegen`, `primitive config push`, or other follow-up?
 
 ### 4c. Report and Fix
 If issues are found:
 1. **Explain the issue** — cite the specific guide section that applies
 2. **Show the fix** — provide corrected code
 3. **Apply the fix** — edit the file directly (don't just suggest, actually fix it)
-4. **Note any CLI commands needed** — e.g., `pnpm codegen` or `primitive sync push`
+4. **Note any CLI commands needed** — e.g., `pnpm codegen` or `primitive config push`
 
 If no issues are found, briefly confirm the code follows best practices.
 
@@ -247,10 +248,10 @@ primitive guides get <topic>       # Read a guide's default variant
 primitive guides get <topic> --language swift --platform ios   # Read a specific language/platform variant
 
 # Configuration as Code
-primitive sync init --dir ./config # Initialize config directory
-primitive sync pull --dir ./config # Pull config from server
-primitive sync push --dir ./config # Push config to server
-primitive sync diff --dir ./config # Preview changes before push
+primitive config init --dir ./config  # Initialize config directory
+primitive config pull --dir ./config  # Pull config from server
+primitive config push --dir ./config  # Push config to server
+primitive config diff --dir ./config  # Preview changes before push
 
 # Common operations
 primitive apps list                # List apps on the active env's server
@@ -279,6 +280,11 @@ primitive integrations logs <integration-id>           # outbound calls: status,
 primitive webhooks events <webhook-id>                 # inbound deliveries and how they were handled
 primitive analytics events                             # app activity events
 
+# Per-subject analytics — one home, the analytics noun
+primitive analytics workflows --window-days 7          # top workflows by runs
+primitive analytics prompts --window-days 7            # top prompts by executions
+primitive analytics integrations                       # calls, error rate, latency
+
 # Blob storage
 primitive blob-buckets list                            # buckets in the app (app-scoped: no selector)
 primitive blob-buckets head <bucket> <key>             # object metadata without downloading
@@ -294,9 +300,13 @@ primitive documents records query <document> <model-name> [--filter '{...}']
 primitive documents records get <document> <model-name> <record-id>
 primitive documents dump <document-id>                 # every model's records as JSON
 primitive documents export <document-id>               # dump a document's contents
+primitive documents create "<title>" [--owner <user-id-or-email>]  # mint a document (--owner needs a super-admin or assigned-console-admin token; app-role admins create as themselves)
+primitive documents delete <document-id> [-y] [--json]  # delete a document (document owner / app owner / super-admin or assigned-console-admin; app-role admins only via a containing collection's document.delete rule)
 
 # Metadata
-primitive metadata get <type> <id> <category>          # resource metadata
+primitive metadata get <type> <id> <category>          # resource metadata VALUES
+primitive metadata-category-configs list               # category DEFINITIONS (schema + read/write rules)
+primitive metadata-category-configs get <type> <category>
 ```
 
 **Uniform flags across every inspection command:**
@@ -304,7 +314,10 @@ primitive metadata get <type> <id> <category>          # resource metadata
 - `--app <id>` — target app (falls back to the resolved env's app).
 - `--json` — the output you parse in scripts. Most commands print the endpoint
   payload as-is; the log views below normalize theirs into the shared item
-  shape. Either way it is a JSON document, never a bare array. Data goes to
+  shape. Either way it is a JSON document, never a bare array — except the
+  type-config readers (`group-type-configs`, `collection-type-configs`,
+  `metadata-category-configs`), whose `list --json` prints the configs as a
+  bare array (`jq '.[]'`). Data goes to
   stdout; status, warnings and the `CLI Version: …` banner go to stderr — so
   even the always-JSON commands that take no `--json` flag pipe cleanly
   (`primitive documents dump <doc> | jq .`).
