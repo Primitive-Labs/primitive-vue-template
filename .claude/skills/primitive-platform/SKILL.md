@@ -253,11 +253,35 @@ primitive config pull --dir ./config  # Pull config from server
 primitive config push --dir ./config  # Push config to server
 primitive config diff --dir ./config  # Preview changes before push
 
+# Taking something out of service (or putting it back)
+primitive workflows disable <key>       # same verb pair on every type that has one
+primitive cron-triggers disable <id>
+primitive webhooks disable <id>
+primitive integrations disable <key>
+primitive prompts disable <key>
+primitive users disable <user-id>       # a person, not an object — reversible
+primitive feature-flags disable <key>   # super-admin platform toggle
+
 # Common operations
 primitive apps list                # List apps on the active env's server
 primitive apps create "Name"       # Create an app (does NOT auto-bind to an env;
                                    # edit .primitive/config.json or use `env add` to bind)
 ```
+
+**Availability is not configuration.** Whether a workflow, cron trigger,
+webhook, integration or prompt is in service is one server-owned `status`
+field, changed only by `<noun> enable|disable` (or the matching console
+action). It is not a TOML key: `config pull` does not emit it, `config push`
+never sends it, and a file that still carries a `status` line fails the push
+with a message naming the verb. So a push cannot put something back in service
+that an operator took out of it, and a fresh environment stood up from config
+has everything active. Anything newly created or pushed is active; there is no
+`draft` state on any object.
+
+Per-VERSION status is a different thing and stays in TOML: a prompt, workflow
+or script config retires a named version with `status = "archived"` inside its
+`[[configs]]` entry, which says which version is live, not whether the object
+is serving.
 
 ## Debugging and inspection
 
@@ -360,7 +384,7 @@ envelope — never a bare array:
   — and `nativeStatus` keeps the source's own value (an HTTP integer, `failed`,
   `duplicate`, …) verbatim, so filtering on the raw value stays possible. A
   webhook that was accepted but matched no active workflow is `ok` with
-  `nativeStatus: "workflow_not_active"` — a non-dispatch, not a failure.
+  `nativeStatus: "workflow_inactive"` — a non-dispatch, not a failure.
 - `correlation` carries the pivot keys that let you follow one operation
   between views (`runId`, `stepId`, `traceId`, `workflowId`, `webhookId`,
   `userId`) plus the row's own id (`stepRunId`, `eventId`), so a row you
@@ -447,8 +471,9 @@ For any question about Primitive platform capabilities:
 
 When the user asks to upgrade the app to a newer platform version, follow this workflow.
 An upgrade is not just a version bump: after the libraries move, workarounds built for old
-platform bugs should come out, and new platform capabilities should be considered. The
-refreshed guides are the source of truth for what the platform can do now.
+platform bugs should come out, the starter template the app was scaffolded from has usually
+moved too, and new platform capabilities should be considered. The refreshed guides are the
+source of truth for what the platform can do now.
 
 The backend is upgraded by the platform team, not by the app — the app only chooses which
 environment it points at (Step 0). A library upgrade against the production environment
@@ -508,7 +533,42 @@ Resolved. If not, keep it and note the version it was last checked against. Stal
 workarounds are a real cost — they mask platform behavior and confuse later readers —
 so default to removing them the moment they're unnecessary.
 
-### 6. Adopt and suggest new features
+### 6. Adopt template updates
+
+The app was scaffolded by `primitive init` from a starter template —
+`Primitive-Labs/primitive-vue-template` for web apps, `Primitive-Labs/primitive-swift-template`
+for iOS. Those templates keep moving with the platform: config, setup, and wiring fixes
+land there and never reach an app generated months earlier. Scan the template the app came
+from (both, if the app has a web and an iOS client) and pull forward what applies. Fetch
+the branch matching the channel you're upgrading to — `main` for production, `alpha` for
+alpha:
+
+```bash
+# Vue
+curl -sL https://github.com/Primitive-Labs/primitive-vue-template/archive/refs/heads/main.tar.gz \
+  | tar -xz -C /tmp
+# Swift
+gh api repos/Primitive-Labs/primitive-swift-template/tarball/main > /tmp/swift-template.tgz
+```
+
+Then compare the template against the app file by file:
+
+- **The app never changed it → move it over.** Where the app still carries the template's
+  version unchanged, take the newer one. That includes files the template has added since
+  the app was scaffolded. No need to ask.
+- **The app removed it → leave it removed.** A file or block the app deleted was deleted
+  on purpose. Never restore it.
+- **Both changed it → ask.** Where the app has its own edits to something the template
+  also changed, don't overwrite. Say what the template's change does and why it landed,
+  then ask whether to merge it in. Ask once per coherent change, not per hunk.
+
+Telling those three cases apart needs a baseline: the template commit the app last synced
+from, recorded in the feedback doc (below). With it, diff baseline→template to see what
+the template changed and baseline→app to see what the app changed; only files in both
+sets need a question. Without a stamp you can't tell an app edit from a template edit, so
+treat every differing file as "ask" — and record the stamp this time.
+
+### 7. Adopt and suggest new features
 
 Re-run `primitive guides list` (topics appear and grow over time) and skim the refreshed
 guides for the app's feature areas. Compare against what the app actually does:
@@ -518,10 +578,11 @@ guides for the app's feature areas. Compare against what the app actually does:
 - Where a capability opens something new but needs a product decision, don't build it —
   report it as a suggestion with a pointer to the relevant guide section.
 
-### 7. Verify and stamp
+### 8. Verify and stamp
 
 Run the app's tests, apply the Step 4 post-code review to everything modified, and
-update the feedback doc's upgrade stamp (date, channel, versions).
+update the feedback doc's upgrade stamp (date, channel, versions, and the template
+commit synced in Step 6).
 
 ### The platform feedback doc
 
@@ -537,6 +598,7 @@ have one, create it during the first upgrade:
 - Last upgraded: 2026-07-21
 - Channel: production
 - Versions: js-bao-wss-client 2.0.6, primitive-app 3.0.5, js-bao 0.5.1, primitive-admin 1.0.55
+- Template: primitive-vue-template @ main 0f1c2d3
 
 ## Open items
 - [#1234] Symptom or missing capability. Workaround: `src/lib/foo.ts:42` (retry loop).
