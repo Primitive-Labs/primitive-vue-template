@@ -622,7 +622,7 @@ through the design gate; all unticked sends it straight to implementation, with
 "Expected behavior" as the acceptance criteria. When unsure, leave a box unticked —
 the worker re-checks against its own diff and routes itself back if one applies.
 
-Labels: `type:bug` + `state:queued`.
+Labels: `type:bug` only.
 
 ### Features / enhancements / platform extensions
 
@@ -644,7 +644,7 @@ from the last event it saw across restarts" — not "add a `resumeAfter` token t
 list endpoint". If you have a design idea worth preserving, put it in a comment,
 clearly labeled as an idea — never in the body.
 
-Labels: `type:feature` + `state:queued`.
+Labels: `type:feature` only.
 
 ### Filing
 
@@ -656,15 +656,16 @@ gh issue list --repo Primitive-Labs/js-bao-wss --search "<keywords>" --state ope
   --json number,title
 ```
 
-Then create the issue with labels only — one `type:*` plus `state:queued`, **no
+Then create the issue with exactly one `type:*` label and nothing else — **no
 assignee** (triage assigns sponsors; unassigned is the correct starting state), no
-priority labels, and no `dispatch-v3` (adding that label is triage's assertion that
-the filing is complete — never the filer's):
+priority labels, no `state:*` label, and no `dispatch-v3` (state and dispatch labels
+are added together by triage once it judges the filing complete — never by the
+filer; an issue waiting for triage is the correct starting state):
 
 ```bash
 gh issue create --repo Primitive-Labs/js-bao-wss \
   --title "<one-line symptom or need>" \
-  --label "type:bug,state:queued" \
+  --label "type:bug" \
   --body "<template body>"
 ```
 
