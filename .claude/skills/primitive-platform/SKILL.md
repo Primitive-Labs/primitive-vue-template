@@ -48,8 +48,15 @@ The two branches below are not equivalent — pick the one that matches reality 
 The active environment is resolved in this order:
 1. `--env <name>` flag on the command
 2. `PRIMITIVE_ENV` environment variable
-3. `defaultEnvironment` in `.primitive/config.json`
-4. The sole environment, if exactly one is defined
+3. This machine's selection in `.primitive/local.json` (written by `primitive env use`, gitignored)
+4. `defaultEnvironment` in `.primitive/config.json` — the committed team default
+5. The sole environment, if exactly one is defined
+
+`primitive env use <name>` does NOT edit the committed config: pointing this
+machine at a different backend never shows up as a file change. `env list`
+shows the resolved current environment and the committed team default
+separately, and reports a corrupt or dangling selection rather than falling
+back to the default.
 
 Confirm you're targeting the correct environment:
 
@@ -58,13 +65,14 @@ Confirm you're targeting the correct environment:
 2. **Inspect the project config:**
 
    ```bash
-   primitive env list           # All environments (default marked with *)
+   primitive env list           # All environments (CURRENT and TEAM DEFAULT shown separately)
    primitive env show           # Details for the currently-resolved env
    primitive whoami             # Authenticated user + resolved server/app
    ```
 
-**To switch environments** for a one-off command, pass `--env <name>`. To change the project
-default, run `primitive env use <name>`. To switch the *app* an env points at, edit the env's
+**To switch environments** for a one-off command, pass `--env <name>`. To point this machine at
+a different environment, run `primitive env use <name>` (local state; the committed
+`defaultEnvironment` is unchanged). To switch the *app* an env points at, edit the env's
 `appId` in `.primitive/config.json` (or re-run `primitive env add`). `primitive use <app>` is a
 no-op when the active env already pins an `appId`.
 
@@ -222,12 +230,12 @@ Remind users of these essential commands when relevant:
 
 ```bash
 # Verify current configuration (DO THIS FIRST)
-primitive env list                 # List environments in .primitive/config.json (default marked *)
+primitive env list                 # List environments (CURRENT vs committed TEAM DEFAULT)
 primitive env show                 # Details for the currently-resolved env (api URL, app ID)
 primitive whoami                   # Authenticated user + resolved server/app
 
 # Switching environments
-primitive env use <name>           # Change the project's default environment
+primitive env use <name>           # Select this machine's environment (gitignored local state)
 primitive --env <name> <command>   # One-off override for a single command
 PRIMITIVE_ENV=<name> <command>     # Override via env var (useful in scripts/CI)
 

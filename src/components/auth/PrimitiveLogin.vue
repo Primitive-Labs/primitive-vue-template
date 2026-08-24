@@ -169,7 +169,10 @@ const showEmailForm = computed(() => {
 });
 
 const showGoogleButton = computed(() => {
-  return authConfig.value?.hasOAuth ?? false;
+  // One predicate, shared with `login()` (#2891): the store computes
+  // `googleAvailable` with the same rule the client's `checkOAuthAvailable()`
+  // uses, so a rendered button can always be clicked.
+  return authConfig.value?.googleAvailable ?? false;
 });
 
 /**

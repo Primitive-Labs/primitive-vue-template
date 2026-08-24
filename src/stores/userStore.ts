@@ -14,7 +14,11 @@ import type {
   StatusChangedEvent,
   UserProfile,
 } from "js-bao-wss-client";
-import { AUTH_CODES, AuthError } from "js-bao-wss-client";
+import {
+  AUTH_CODES,
+  AuthError,
+  googleWebClientAvailable,
+} from "js-bao-wss-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { useTheme } from "../composables/useTheme";
@@ -39,8 +43,13 @@ export interface AuthConfig {
   mode: "public" | "invite-only" | "domain";
   /** Whether waitlist is enabled for invite-only apps */
   waitlistEnabled: boolean;
-  /** Whether Google OAuth is configured and usable */
-  hasOAuth: boolean;
+  /**
+   * Whether THIS (browser) client can start Google sign-in: the provider is
+   * enabled and the `web` client entry is usable (#2891). Google registers a
+   * client per platform, so there is no single server-side flag to read — an
+   * app configured only for iOS is not available here.
+   */
+  googleAvailable: boolean;
   /** Whether passkeys are fully configured (enabled + rpId + rpName) */
   hasPasskey: boolean;
   /** Whether magic link authentication is enabled */
@@ -400,7 +409,11 @@ export const useUserStore = defineStore("user", () => {
           name: config.name,
           mode: config.mode as "public" | "invite-only" | "domain",
           waitlistEnabled: config.waitlistEnabled,
-          hasOAuth: config.hasOAuth,
+          // The SAME predicate `login()` re-checks below, computed once from
+          // the client map. Before #2891 the button read `hasOAuth` and
+          // `login()` gated on `hasWebOAuth`, so a native-only configuration
+          // rendered a Google button that threw on click.
+          googleAvailable: googleWebClientAvailable(config),
           hasPasskey: config.hasPasskey,
           magicLinkEnabled: config.magicLinkEnabled ?? true,
           otpEnabled: configWithOtp.otpEnabled ?? false,
@@ -428,8 +441,8 @@ export const useUserStore = defineStore("user", () => {
    */
   const login = async (continueURL?: string): Promise<void> => {
     const client = await jsBaoClientService.getClientAsync();
-    const hasOAuth = await client.checkOAuthAvailable();
-    if (!hasOAuth) throw new Error("OAuth is not available");
+    const googleAvailable = await client.checkOAuthAvailable();
+    if (!googleAvailable) throw new Error("OAuth is not available");
     const inviteToken = getPendingInviteToken() ?? undefined;
     await client.startOAuthFlow(continueURL, { inviteToken });
   };

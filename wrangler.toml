@@ -3,11 +3,16 @@
 # =============================================================================
 # Worker and deployment configuration for Cloudflare Workers.
 #
-# App configuration (APP_ID, API_ORIGIN) comes from .env files and is
-# passed to the worker at deploy time via --var flags. This keeps all app
-# config in .env files for consistency between development and production.
+# The worker's APP_ID and API_ORIGIN are NOT authored here or in a .env file.
+# They come from the Primitive environment named on the deploy command, which
+# reads .primitive/config.json — the one place the backend URL and app ID are
+# typed — and passes them at deploy time via --var flags.
 #
-# To deploy: pnpm cf-deploy production
+# A deploy names two independent things:
+#   --deploy-env <name>     this file's [env.<name>] section, and the Vite mode
+#   --primitive-env <name>  the backend/app pair in .primitive/config.json
+#
+# To deploy: pnpm cf-deploy --deploy-env production --primitive-env prod
 # =============================================================================
 
 name = "YOUR APP NAME HERE"
@@ -22,8 +27,8 @@ not_found_handling = "single-page-application"
 # =============================================================================
 # PRODUCTION ENVIRONMENT
 # =============================================================================
-# Deploy with: pnpm cf-deploy production
-# Config from: .env.production
+# Deploy with: pnpm cf-deploy --deploy-env production --primitive-env <name>
+# App behavior from: .env.production   |   Identity from: .primitive/config.json
 # =============================================================================
 [env.production]
 name = "YOUR APP NAME HERE-prod"
@@ -39,13 +44,15 @@ name = "YOUR APP NAME HERE-prod"
 REFRESH_PROXY_COOKIE_MAX_AGE = "604800"
 REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 
-# Note: APP_ID and API_ORIGIN are read from .env.production by the deploy script
-# and passed to wrangler via --var flags. Do not duplicate them here.
+# Note: APP_ID and API_ORIGIN come from the Primitive environment named by
+# --primitive-env (an entry in .primitive/config.json) and are passed to
+# wrangler via --var flags by the deploy script. Do not duplicate them here,
+# and never put them in a .env file — a deploy rejects that outright.
 
 # =============================================================================
 # ADDITIONAL ENVIRONMENTS
 # =============================================================================
-# To add a test environment:
+# To add a test DEPLOY environment (another front end):
 #
 # 1. Add a section here:
 #    [env.test]
@@ -54,6 +61,11 @@ REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 #    REFRESH_PROXY_COOKIE_MAX_AGE = "604800"
 #    REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 #
-# 2. Create .env.test with your test configuration
+# 2. Create .env.test with app behavior for that build (no app ID — identity
+#    comes from .primitive/config.json)
 #
-# 3. Deploy with: pnpm cf-deploy test
+# 3. Deploy it against whichever backend you want:
+#    pnpm cf-deploy --deploy-env test --primitive-env <name>
+#
+# Adding a BACKEND is the other axis and touches nothing here:
+#    primitive env add alpha --api-url https://... --app-id app_...
