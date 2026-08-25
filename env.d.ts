@@ -12,6 +12,11 @@ interface ImportMetaEnv {
   readonly VITE_PRIMITIVE_ENV?: string;
 
   // App behavior, authored in .env / .env.<mode>.
+  /**
+   * Opt-in: the Primitive environment this mode is meant to run against. A run
+   * that resolves a different one fails at startup.
+   */
+  readonly VITE_EXPECTED_PRIMITIVE_ENV?: string;
   readonly VITE_OAUTH_REDIRECT_URI: string;
   readonly VITE_ENABLE_AUTH_PROXY?: string;
   readonly VITE_LOG_LEVEL?: string;

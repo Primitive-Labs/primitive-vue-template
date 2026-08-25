@@ -186,7 +186,7 @@ When writing Primitive code:
 
 1. **Follow the patterns from the fetched guides exactly** — method names, argument order, lifecycle patterns
 2. **Use `primitive config`** for all backend configuration (workflows, prompts, integrations, databases)
-3. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name)
+3. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name). A case file's name is its identity: `config pull` writes it back under that name and renaming it renames the case, so the checked-in tree reconciles on a fresh clone instead of duplicating
 4. **Run `pnpm codegen`** after creating or modifying js-bao models
 
 ## Step 4: Post-Code Review (Automatic)
@@ -248,7 +248,18 @@ primitive login                                         # Authenticate (tokens s
 # Setup — brand-new project (greenfield only)
 primitive init my-new-app                               # Scaffolds template, creates a new app
                                                         # on the server, runs pnpm install.
-                                                        # Do NOT run inside an existing repo.
+primitive init my-new-app --platform web,ios            # One app, a web client AND a native
+                                                        # client: web/ and ios/, with the project
+                                                        # config, git repo and the shared
+                                                        # models/models.toml at the root.
+
+# Setup — adding a client to an app that already exists
+primitive init ios --platform ios                       # Run INSIDE the app's repo: adds the
+                                                        # client to the app the nearest ancestor
+                                                        # .primitive/config.json targets. Writes
+                                                        # no nested .primitive/ or .git/ and makes
+                                                        # no commit — review with `git status`.
+                                                        # Read the multi-client guide first.
 
 # Guides (the most important commands for development)
 primitive guides list              # See all guides: topics, descriptions, available (lang,platform) combinations

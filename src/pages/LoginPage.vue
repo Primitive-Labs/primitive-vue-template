@@ -121,7 +121,6 @@ const autoplayPlugin = Autoplay({
       <PrimitiveLogin
         :appName="config.appName"
         defaultContinueRoute="home"
-        emailAuthMethod="one_time_code"
         onboardingRoute="onboarding"
       >
         <template #header>

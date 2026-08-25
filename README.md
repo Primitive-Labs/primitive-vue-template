@@ -63,7 +63,7 @@ Visit `http://localhost:5173`.
 - Tailwind 4 with `tw-animate-css`
 
 ### Data layer
-- `js-bao` v2 codegen wired up — edit `src/models/models.toml`, run `pnpm codegen`, import from `@/models`
+- `js-bao` v2 codegen wired up — edit the schema `pnpm codegen` reads (`src/models/models.toml` here), run `pnpm codegen`, import from `@/models`
 - `UserPref` ships as an example model and powers user-prefs storage in `userStore`
 - `useJsBaoDataLoader` composable: debounced query + auto-resubscribe on model changes
 
@@ -92,7 +92,7 @@ src/
 ├── config/         envConfig.ts — read VITE_* vars
 ├── layouts/        AppLayout, LoginLayout
 ├── lib/            inviteToken, logger, routeOrUrl, utils
-├── models/         models.toml + *.generated.ts + barrel index.ts
+├── models/         models.toml (unless the app's schema is shared above this client) + *.generated.ts + barrel index.ts
 ├── pages/          HomePage, LoginPage, InviteAcceptPage, NotFoundPage
 ├── router/         routes.ts (createPrimitiveRouter), primitiveRouter.ts
 ├── stores/         userStore (auth + user prefs)
@@ -104,7 +104,7 @@ src/
 
 ## Adding a Model
 
-1. Add a `[models.<name>]` section to `src/models/models.toml`.
+1. Add a `[models.<name>]` section to the schema the `codegen` script names with `-i` — `src/models/models.toml` here, or a shared `models/models.toml` above this directory when this client is one of several against one Primitive app. There is one schema per app, never a copy: its TOML keys are the wire field names.
 2. Run `pnpm codegen` to regenerate the `*.generated.ts` files.
 3. Register the new class in `src/models/index.ts` (the barrel uses `attachAndRegisterModel` to bind each class to its TOML schema).
 4. Import from `@/models` anywhere — the barrel registers all models as a side effect on first import.
@@ -189,6 +189,12 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
   run at a different backend with `primitive env use <name>` or
   `PRIMITIVE_ENV=<name> pnpm test`; vitest `--mode` selects the `.env.<mode>`
   file for app behavior only.
+- Because the two are independent, `PRIMITIVE_ENV=dev pnpm test --mode alpha`
+  is a run against `dev` with alpha's app behavior — and it signs in and writes
+  data there. If a mode's keys only make sense against one backend, declare
+  `VITE_EXPECTED_PRIMITIVE_ENV` in its `.env.<mode>` (see
+  [Pinning a mode to a Primitive environment](#pinning-a-mode-to-a-primitive-environment))
+  and a mismatched run stops at config time, before sign-in.
 - Tests that return a score (`"passed/total (pct%)"`) fail the run when below
   a full score, so parity-style suites actually gate CI. The browser panel
   shows the same result as "scored" without failing.
@@ -243,6 +249,46 @@ identity at all:
 
 Setting an identity key here still wins for local dev (with a warning), as an
 escape hatch for CI. A deploy rejects it outright.
+
+### Pinning a mode to a Primitive environment
+
+The two axes are independent on purpose — a production front end against the
+alpha backend is a real combination. But when a mode's keys are only correct
+against one backend (a per-environment resource ID, a shared database ULID),
+the wrong pairing is silent: the app runs one backend's identity with another
+backend's configuration and simply misbehaves.
+
+Say which environment the mode belongs to, in that mode's `.env` file:
+
+```dotenv
+# .env.alpha
+VITE_EXPECTED_PRIMITIVE_ENV=alpha
+```
+
+Any run whose Primitive environment resolves to something else now fails at
+startup, naming both halves and where each came from — `pnpm dev`, `pnpm
+build`, `pnpm cf-deploy`, and `pnpm test` alike, because all four resolve the
+environment through the same plugin:
+
+```
+PRIMITIVE_ENV=dev pnpm test --mode alpha    # stops before signing in
+```
+
+- **Opt-in.** No declaration (the default) keeps the axes fully independent.
+- A value in the base `.env` is the default for every mode; `.env.<mode>`
+  overrides it, and an empty value there switches the check off for that mode.
+- `VITE_EXPECTED_PRIMITIVE_ENV=<name>` in the shell wins over the files — which
+  is how you run a cross-wired pair on purpose: state it and the environment
+  together, `VITE_EXPECTED_PRIMITIVE_ENV=dev PRIMITIVE_ENV=dev pnpm test --mode
+  alpha`.
+- The pure-env CI hatch still applies: a build that supplies both
+  `VITE_APP_ID` and `VITE_API_URL` itself resolves nothing, so there is nothing
+  to check. Overriding just one of them does *not* skip the check — the other
+  half still comes from the resolved environment.
+- `pnpm cf-deploy` checks the declaration against `--primitive-env` before it
+  builds or prints a plan. It reads `.env*` from the project root; if you have
+  moved Vite's `envDir`, a real deploy still fails inside the build, but
+  `--check` will not see the declaration.
 
 ## Optional: Set Up Git
 

@@ -19,7 +19,10 @@
  * customer whose dev and prod builds both hit primitiveapi.com with different
  * app IDs — so neither is inferred from the other, and omitting either is an
  * error. Say "deploy environment" or "Primitive environment"; a bare
- * "environment" is ambiguous here.
+ * "environment" is ambiguous here. An app whose `.env.<mode>` carries values
+ * coupled to one backend can pin the pair anyway: declare
+ * `VITE_EXPECTED_PRIMITIVE_ENV=<name>` there and a mismatched `--primitive-env`
+ * stops this script before it plans or builds anything.
  *
  * Examples:
  *   pnpm cf-deploy --deploy-env production --primitive-env prod
@@ -50,6 +53,9 @@ const CONFIG_VERSION = 1;
 
 /** Keys the `primitiveEnv()` plugin owns. Authoring one here is the old way. */
 const IDENTITY_KEYS = ["VITE_APP_ID", "VITE_API_URL", "VITE_WS_URL", "VITE_APP_NAME"];
+
+/** Opt-in: the Primitive environment a deploy environment is meant to pair with. */
+const EXPECTED_ENV_KEY = "VITE_EXPECTED_PRIMITIVE_ENV";
 
 const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--check] [-- wrangler args...]
 
@@ -181,7 +187,13 @@ function readPrimitiveEnvironment(name) {
   };
 }
 
-/** Minimal `.env` reader — same rules the primitiveEnv() plugin applies. */
+/**
+ * Minimal `.env` reader — same rules the primitiveEnv() plugin applies, which
+ * are Vite's own: a quoted value ends at its closing quote (a `#` inside it is
+ * content, and the rest of the line is a comment), an unquoted one ends at the
+ * first inline comment. The deploy and the build it launches must never read a
+ * `.env` line differently.
+ */
 function parseEnvFile(path) {
   if (!existsSync(path)) return {};
   const out = {};
@@ -190,16 +202,11 @@ function parseEnvFile(path) {
     if (!trimmed || trimmed.startsWith("#")) continue;
     const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!match) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
-    ) {
-      value = value.slice(1, -1);
-    } else {
-      value = value.replace(/\s+#.*$/, "").trim();
-    }
-    out[match[1]] = value;
+    const value = match[2].trim();
+    const quote = value[0];
+    const close =
+      quote === '"' || quote === "'" || quote === "`" ? value.indexOf(quote, 1) : -1;
+    out[match[1]] = close === -1 ? value.replace(/\s+#.*$/, "").trim() : value.slice(1, close);
   }
   return out;
 }
@@ -238,6 +245,49 @@ function assertNoIdentityOverrides(deployEnv) {
     "and reach the build through the primitiveEnv() Vite plugin. If this app was",
     "scaffolded by an older CLI, deleting these lines from your .env files is the",
     "whole migration.",
+  );
+}
+
+/**
+ * The two axes cross on purpose — but an app whose `.env.<mode>` carries
+ * values coupled to one backend can pin the pair by declaring
+ * `VITE_EXPECTED_PRIMITIVE_ENV` in that file. The `primitiveEnv()` plugin
+ * enforces the same declaration inside the build; this pre-flight runs first
+ * because `--check` never builds, and because a `[deploy]` line is a better
+ * answer than a stack trace from a build child process.
+ *
+ * Read from the project root, as the rest of this script is: the template
+ * never sets Vite's `envDir`, and a cross-wired real deploy under a custom one
+ * still fails inside the build.
+ */
+function assertPairing(deployEnv, primitiveEnv) {
+  let declared = null;
+  let where = null;
+
+  const ambient = process.env[EXPECTED_ENV_KEY];
+  if (ambient !== undefined && ambient !== "") {
+    declared = ambient;
+    where = "the process environment";
+  } else {
+    // Vite precedence: a later file wins, and an empty value there cancels
+    // the declaration rather than inheriting the one below it.
+    for (const file of [".env", ".env.local", `.env.${deployEnv}`, `.env.${deployEnv}.local`]) {
+      const value = parseEnvFile(join(ROOT_DIR, file))[EXPECTED_ENV_KEY];
+      if (value !== undefined) {
+        declared = value;
+        where = file;
+      }
+    }
+  }
+
+  if (!declared || declared === primitiveEnv) return;
+
+  fail(
+    `Wrong pair: deploy environment "${deployEnv}" declares ${EXPECTED_ENV_KEY}="${declared}"`,
+    `(in ${where}), but --primitive-env is "${primitiveEnv}".`,
+    "",
+    `Deploy the pair you meant: --deploy-env ${deployEnv} --primitive-env ${declared}`,
+    `— or change/remove the ${EXPECTED_ENV_KEY} declaration in ${where}.`,
   );
 }
 
@@ -318,6 +368,7 @@ async function main() {
 
   assertPassthroughIsSafe(args.passthrough);
   assertNoIdentityOverrides(args.deployEnv);
+  assertPairing(args.deployEnv, args.primitiveEnv);
 
   const env = readPrimitiveEnvironment(args.primitiveEnv);
 
