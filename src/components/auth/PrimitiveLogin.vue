@@ -879,11 +879,6 @@ onUnmounted(() => {
                 We sent a sign-in email to
                 <span class="font-medium text-foreground">{{ sentEmail }}</span>
               </p>
-              <p class="text-muted-foreground text-xs">
-                Enter the 6-digit code below. If that email also has a sign-in
-                link, opening it on any device works just as well. Either one
-                signs you in, and it expires in 15 minutes.
-              </p>
             </div>
           </div>
 

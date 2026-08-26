@@ -281,6 +281,13 @@ primitive prompts disable <key>
 primitive users disable <user-id>       # a person, not an object — reversible
 primitive feature-flags disable <key>   # super-admin platform toggle
 
+# Retiring an object (soft delete; NOT the same as disable)
+primitive workflows archive <key>       # same verb on the five types that carry
+primitive cron-triggers archive <id>    # `archived`; confirms first, -y skips
+primitive webhooks archive <id>
+primitive integrations archive <id>     # the ID column of `integrations list`
+primitive prompts archive <id>          # the ID column of `prompts list`
+
 # Common operations
 primitive apps list                # List apps on the active env's server
 primitive apps create "Name"       # Create an app (does NOT auto-bind to an env;
@@ -290,12 +297,23 @@ primitive apps create "Name"       # Create an app (does NOT auto-bind to an env
 **Availability is not configuration.** Whether a workflow, cron trigger,
 webhook, integration or prompt is in service is one server-owned `status`
 field, changed only by `<noun> enable|disable` (or the matching console
-action). It is not a TOML key: `config pull` does not emit it, `config push`
-never sends it, and a file that still carries a `status` line fails the push
-with a message naming the verb. So a push cannot put something back in service
+action) and by the delete flow, whose CLI spelling is `<noun> archive` on those
+same five types. It is not a TOML key: `config pull` does not emit it,
+`config push` never sends it, and a file that still carries a `status` line
+fails the push with a message naming the verbs. So a push cannot put something back in service
 that an operator took out of it, and a fresh environment stood up from config
 has everything active. Anything newly created or pushed is active; there is no
 `draft` state on any object.
+
+**`archive` retires, `--prune` destroys.** `<noun> archive <id>` writes the
+third value, `archived`: the delete lifecycle rather than availability. The row
+is kept so its history still resolves, it goes on holding its key — and, for
+webhooks and cron triggers, its slot against the per-app cap — `enable` refuses
+it, and there is no un-archive. Reclaiming the key means a hard delete: remove
+the object's TOML file and run a confirmed `primitive config push --prune`, then
+re-add the file and push. There is no `--hard` flag and no per-type `delete`
+verb; prune-by-push is the CLI's only hard delete. `users` and `admins` carry
+`enable`/`disable` but no `archive` — people are not configuration objects.
 
 Per-VERSION status is a different thing and stays in TOML: a prompt, workflow
 or script config retires a named version with `status = "archived"` inside its
