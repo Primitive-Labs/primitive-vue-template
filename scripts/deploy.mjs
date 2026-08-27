@@ -1,217 +1,421 @@
 #!/usr/bin/env node
 /**
- * Deploy script that reads configuration from environment-specific .env files,
- * builds the project, and deploys to Cloudflare Workers.
+ * Build and deploy this app to Cloudflare Workers.
  *
- * Usage: pnpm cf-deploy <environment> [-- other wrangler options...]
+ * Usage:
+ *   pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--check] [-- wrangler args...]
+ *
+ * TWO INDEPENDENT AXES, neither of which defaults:
+ *
+ *   --deploy-env <name>     WHICH FRONT END. The Vite mode (`--mode <name>`,
+ *                           so `.env.<name>` applies) and the Wrangler
+ *                           environment (`[env.<name>]` in wrangler.toml).
+ *
+ *   --primitive-env <name>  WHICH BACKEND / APP. A key in
+ *                           `.primitive/config.json`, supplying apiUrl,
+ *                           appId and appName.
+ *
+ * They cross in practice — a production front end against the alpha backend, a
+ * customer whose dev and prod builds both hit primitiveapi.com with different
+ * app IDs — so neither is inferred from the other, and omitting either is an
+ * error. Say "deploy environment" or "Primitive environment"; a bare
+ * "environment" is ambiguous here. An app whose `.env.<mode>` carries values
+ * coupled to one backend can pin the pair anyway: declare
+ * `VITE_EXPECTED_PRIMITIVE_ENV=<name>` there and a mismatched `--primitive-env`
+ * stops this script before it plans or builds anything.
  *
  * Examples:
- *   pnpm cf-deploy test              -> reads .env.test, deploys to test worker
- *   pnpm cf-deploy production        -> reads .env.production, deploys to prod worker
- *   pnpm cf-deploy production -- --dry-run  -> with extra wrangler flags
+ *   pnpm cf-deploy --deploy-env production --primitive-env prod
+ *   pnpm cf-deploy --deploy-env production --primitive-env alpha
+ *   pnpm cf-deploy --deploy-env production --primitive-env prod --check
+ *   pnpm cf-deploy --deploy-env production --primitive-env prod -- --dry-run
  *
- * This script:
- * 1. Reads configuration from .env.{environment} (the source of truth)
- * 2. Runs the production build with the appropriate env file
- * 3. Deploys using wrangler, passing APP_ID and API_ORIGIN as --var flags
+ * `.primitive/config.json` is the ONLY place the backend URL and app ID are
+ * typed. This script reads them from there and passes them to the worker as
+ * `--var APP_ID` / `--var API_ORIGIN`; the build gets `PRIMITIVE_ENV` so the
+ * `primitiveEnv()` Vite plugin resolves the same environment. An identity key
+ * (`VITE_APP_ID`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_APP_NAME`) in a `.env`
+ * file or the shell is a hard error rather than a silent second source.
+ *
+ * Node builtins only, and every spawn is an argv array with `shell: false`.
  */
 
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = resolve(__dirname, "..");
 
-/**
- * Parse a .env file into an object
- */
-function parseEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
+/** Schema version of `.primitive/config.json` this script understands. */
+const CONFIG_VERSION = 1;
 
-  const content = fs.readFileSync(filePath, "utf-8");
-  const vars = {};
+/** Keys the `primitiveEnv()` plugin owns. Authoring one here is the old way. */
+const IDENTITY_KEYS = ["VITE_APP_ID", "VITE_API_URL", "VITE_WS_URL", "VITE_APP_NAME"];
 
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
+/** Opt-in: the Primitive environment a deploy environment is meant to pair with. */
+const EXPECTED_ENV_KEY = "VITE_EXPECTED_PRIMITIVE_ENV";
 
-    // Skip comments and empty lines
-    if (trimmed.startsWith("#") || trimmed === "") continue;
+const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--check] [-- wrangler args...]
 
-    const match = trimmed.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-    if (match) {
-      let value = match[2];
+  --deploy-env <name>     Which front end: the Vite mode and the wrangler.toml
+                          [env.<name>] section. e.g. production
+  --primitive-env <name>  Which backend/app: an environment in
+                          .primitive/config.json. e.g. prod, alpha
+  --check                 Print the resolved pair and the exact commands, then exit.
 
-      // Remove surrounding quotes if present
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
+Both are required — neither is inferred from the other.
 
-      vars[match[1]] = value;
-    }
-  }
+  pnpm cf-deploy --deploy-env production --primitive-env prod`;
 
-  return vars;
+function fail(...lines) {
+  for (const line of lines) console.error(`[deploy] ${line}`);
+  process.exit(1);
 }
 
-/**
- * Mapping from .env vars to wrangler --var names
- * These are the vars the worker needs at runtime
- */
-const ENV_TO_WRANGLER_VARS = {
-  VITE_APP_ID: "APP_ID",
-  VITE_API_URL: "API_ORIGIN",
-};
+function parseArgs(argv) {
+  const parsed = {
+    deployEnv: null,
+    primitiveEnv: null,
+    check: false,
+    positional: null,
+    passthrough: [],
+  };
 
-/**
- * Parse command line arguments to extract the environment name
- * Supports: pnpm cf-deploy <env> [-- extra wrangler args]
- */
-function parseArgs(args) {
-  let env = null;
-  const wranglerArgs = [];
-
-  // First non-flag argument is the environment
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-
-    if (!env && !arg.startsWith("-")) {
-      // First positional argument is the environment
-      env = arg;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") {
+      parsed.passthrough.push(...argv.slice(i + 1));
+      break;
+    }
+    if (arg === "--deploy-env") {
+      parsed.deployEnv = argv[++i] ?? null;
+    } else if (arg.startsWith("--deploy-env=")) {
+      parsed.deployEnv = arg.slice("--deploy-env=".length);
+    } else if (arg === "--primitive-env") {
+      parsed.primitiveEnv = argv[++i] ?? null;
+    } else if (arg.startsWith("--primitive-env=")) {
+      parsed.primitiveEnv = arg.slice("--primitive-env=".length);
+    } else if (arg === "--check" || arg === "--dry-run-plan") {
+      parsed.check = true;
+    } else if (!arg.startsWith("-") && parsed.positional === null) {
+      parsed.positional = arg;
     } else {
-      // Everything else goes to wrangler
-      wranglerArgs.push(arg);
+      // Anything else before `--` is an unknown flag. There is deliberately no
+      // escape hatch here (notably none for the identity check below), so an
+      // unrecognized flag is a mistake worth naming.
+      fail(`Unknown option: ${arg}`, "", USAGE);
     }
   }
 
-  return { env, wranglerArgs };
+  return parsed;
+}
+
+/** Finds `.primitive/config.json`, honoring the PRIMITIVE_PROJECT_CONFIG override. */
+function findProjectConfigPath() {
+  const override = process.env.PRIMITIVE_PROJECT_CONFIG;
+  if (override) {
+    const forced = resolve(override);
+    return existsSync(forced) ? forced : null;
+  }
+  let current = ROOT_DIR;
+  for (;;) {
+    const candidate = join(current, ".primitive", "config.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+/** Reads the environment identity for `name`, failing loudly on anything odd. */
+function readPrimitiveEnvironment(name) {
+  const configPath = findProjectConfigPath();
+  if (!configPath) {
+    fail(
+      "No .primitive/config.json found for this project.",
+      "It is the single source of truth for the backend URL and app ID.",
+      "Run 'primitive init' to create one, or 'primitive env add <name> --api-url ... --app-id ...'.",
+    );
+  }
+
+  let config;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    fail(`Could not parse ${configPath}: ${err.message}`);
+  }
+
+  if (config?.version !== CONFIG_VERSION) {
+    fail(
+      `${configPath} has version ${config?.version}, but this script understands version ${CONFIG_VERSION}.`,
+      "Upgrade the Primitive CLI and this template together.",
+    );
+  }
+  if (!config.environments || typeof config.environments !== "object") {
+    fail(`${configPath} has no "environments" object.`);
+  }
+
+  const entry = config.environments[name];
+  if (!entry) {
+    const available = Object.keys(config.environments).join(", ") || "(none)";
+    fail(
+      `Primitive environment "${name}" is not defined in ${configPath}.`,
+      `Available: ${available}`,
+    );
+  }
+  if (typeof entry.apiUrl !== "string" || !entry.apiUrl) {
+    fail(`Primitive environment "${name}" has no "apiUrl" in ${configPath}.`);
+  }
+  // Typed, not merely present: the schema says these are strings, and the
+  // resolver the build uses treats anything else as absent. A number or object
+  // here would otherwise reach wrangler as `--var APP_ID:[object Object]`.
+  if (typeof entry.appId !== "string" || !entry.appId) {
+    fail(
+      `Primitive environment "${name}" has no "appId" string in ${configPath}, and a deploy needs one.`,
+      `Add it with: primitive env add ${name} --api-url ${entry.apiUrl} --app-id <id>`,
+    );
+  }
+
+  return {
+    name,
+    apiUrl: entry.apiUrl.replace(/\/$/, ""),
+    appId: entry.appId,
+    appName: typeof entry.appName === "string" ? entry.appName : undefined,
+    configPath,
+  };
 }
 
 /**
- * Run a command and return a promise
+ * Minimal `.env` reader — same rules the primitiveEnv() plugin applies, which
+ * are Vite's own: a quoted value ends at its closing quote (a `#` inside it is
+ * content, and the rest of the line is a comment), an unquoted one ends at the
+ * first inline comment. The deploy and the build it launches must never read a
+ * `.env` line differently.
  */
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
+function parseEnvFile(path) {
+  if (!existsSync(path)) return {};
+  const out = {};
+  for (const line of readFileSync(path, "utf-8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    const value = match[2].trim();
+    const quote = value[0];
+    const close =
+      quote === '"' || quote === "'" || quote === "`" ? value.indexOf(quote, 1) : -1;
+    out[match[1]] = close === -1 ? value.replace(/\s+#.*$/, "").trim() : value.slice(1, close);
+  }
+  return out;
+}
+
+/**
+ * A deploy is strict about identity: the build must take it from
+ * `.primitive/config.json`, and the worker vars below come from the same
+ * place. An identity key anywhere the build would see it means the two could
+ * disagree, so it stops the deploy. There is no override flag — remove the
+ * key. (This is also the migration step for an app scaffolded by an older CLI,
+ * which appended these keys to `.env`.)
+ */
+function assertNoIdentityOverrides(deployEnv) {
+  const found = [];
+
+  for (const key of IDENTITY_KEYS) {
+    if (process.env[key] !== undefined && process.env[key] !== "") {
+      found.push({ key, where: "the process environment" });
+    }
+  }
+
+  for (const file of [".env", ".env.local", `.env.${deployEnv}`, `.env.${deployEnv}.local`]) {
+    const vars = parseEnvFile(join(ROOT_DIR, file));
+    for (const key of IDENTITY_KEYS) {
+      if (vars[key] !== undefined) found.push({ key, where: file });
+    }
+  }
+
+  if (found.length === 0) return;
+
+  fail(
+    "Identity keys must not be set for a deploy — they would compete with .primitive/config.json:",
+    ...found.map(({ key, where }) => `  ${key} (in ${where})`),
+    "",
+    "Remove them. The backend URL and app ID are typed once, in .primitive/config.json,",
+    "and reach the build through the primitiveEnv() Vite plugin. If this app was",
+    "scaffolded by an older CLI, deleting these lines from your .env files is the",
+    "whole migration.",
+  );
+}
+
+/**
+ * The two axes cross on purpose — but an app whose `.env.<mode>` carries
+ * values coupled to one backend can pin the pair by declaring
+ * `VITE_EXPECTED_PRIMITIVE_ENV` in that file. The `primitiveEnv()` plugin
+ * enforces the same declaration inside the build; this pre-flight runs first
+ * because `--check` never builds, and because a `[deploy]` line is a better
+ * answer than a stack trace from a build child process.
+ *
+ * Read from the project root, as the rest of this script is: the template
+ * never sets Vite's `envDir`, and a cross-wired real deploy under a custom one
+ * still fails inside the build.
+ */
+function assertPairing(deployEnv, primitiveEnv) {
+  let declared = null;
+  let where = null;
+
+  const ambient = process.env[EXPECTED_ENV_KEY];
+  if (ambient !== undefined && ambient !== "") {
+    declared = ambient;
+    where = "the process environment";
+  } else {
+    // Vite precedence: a later file wins, and an empty value there cancels
+    // the declaration rather than inheriting the one below it.
+    for (const file of [".env", ".env.local", `.env.${deployEnv}`, `.env.${deployEnv}.local`]) {
+      const value = parseEnvFile(join(ROOT_DIR, file))[EXPECTED_ENV_KEY];
+      if (value !== undefined) {
+        declared = value;
+        where = file;
+      }
+    }
+  }
+
+  if (!declared || declared === primitiveEnv) return;
+
+  fail(
+    `Wrong pair: deploy environment "${deployEnv}" declares ${EXPECTED_ENV_KEY}="${declared}"`,
+    `(in ${where}), but --primitive-env is "${primitiveEnv}".`,
+    "",
+    `Deploy the pair you meant: --deploy-env ${deployEnv} --primitive-env ${declared}`,
+    `— or change/remove the ${EXPECTED_ENV_KEY} declaration in ${where}.`,
+  );
+}
+
+/**
+ * Every spelling of Wrangler's environment flag. Wrangler parses with yargs,
+ * which accepts `-e alpha`, `-e=alpha` and `-ealpha` for the short form and
+ * `--env alpha` / `--env=alpha` for the long one — and a later occurrence wins
+ * over the `--env` this script passes. Matching only the exact tokens would
+ * let `-e=alpha` through and deploy somewhere other than the environment the
+ * run just printed, so every spelling of the flag itself is rejected. Longer
+ * flags that merely begin with `--env` (`--env-file`) are left alone.
+ */
+const WRANGLER_ENV_FLAG = /^(--env(=.*)?|-e(=.*|.+)?)$/;
+
+/** Rejects passthrough args that would take over what this script decides. */
+function assertPassthroughIsSafe(passthrough) {
+  for (let i = 0; i < passthrough.length; i++) {
+    const arg = passthrough[i];
+    if (WRANGLER_ENV_FLAG.test(arg)) {
+      fail(
+        `Passthrough argument "${arg}" would re-point the Wrangler environment.`,
+        "Use --deploy-env, which sets both the Vite mode and the Wrangler environment.",
+      );
+    }
+    const varValue = arg === "--var" ? passthrough[i + 1] : arg.startsWith("--var=") ? arg.slice("--var=".length) : null;
+    if (varValue && /^(APP_ID|API_ORIGIN)[:=]/.test(varValue)) {
+      fail(
+        `Passthrough argument "--var ${varValue}" would override the identity this deploy resolved.`,
+        "APP_ID and API_ORIGIN come from the Primitive environment; other --var flags pass through.",
+      );
+    }
+  }
+}
+
+function runCommand(command, args, extraEnv = {}) {
+  return new Promise((resolvePromise, reject) => {
     console.log(`\n> ${command} ${args.join(" ")}\n`);
     const child = spawn(command, args, {
       stdio: "inherit",
-      shell: true,
+      shell: false,
       cwd: ROOT_DIR,
-      ...options,
+      env: { ...process.env, ...extraEnv },
     });
-
     child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Command failed with exit code ${code}`));
-      }
+      if (code === 0) resolvePromise();
+      else reject(new Error(`Command failed with exit code ${code}`));
     });
-
     child.on("error", reject);
   });
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const { env, wranglerArgs } = parseArgs(args);
+  const args = parseArgs(process.argv.slice(2));
 
-  if (!env) {
-    console.error("[deploy] Error: environment argument is required");
-    console.error("[deploy] Usage: pnpm cf-deploy <environment>");
-    console.error("[deploy] Examples:");
-    console.error("[deploy]   pnpm cf-deploy test");
-    console.error("[deploy]   pnpm cf-deploy production");
-    console.error("[deploy]   pnpm cf-deploy production -- --dry-run");
-    process.exit(1);
-  }
-
-  // Determine which .env file to use
-  const envFileName = `.env.${env}`;
-  const envFilePath = path.join(ROOT_DIR, envFileName);
-
-  console.log(`[deploy] Environment: ${env}`);
-  console.log(`[deploy] Config file: ${envFileName}`);
-
-  // Read the environment-specific .env file
-  const envVars = parseEnvFile(envFilePath);
-
-  if (!envVars) {
-    console.error(`[deploy] Error: ${envFileName} not found`);
-    console.error(
-      `[deploy] Please create ${envFileName} with your ${env} configuration`
-    );
-    console.error(`[deploy] You can copy .env.production as a starting point:`);
-    console.error(`[deploy]   cp .env.production ${envFileName}`);
-    process.exit(1);
-  }
-
-  console.log(`\n[deploy] Configuration from ${envFileName}:`);
-  for (const [key, value] of Object.entries(envVars)) {
-    // Mask sensitive values and truncate long ones
-    const displayValue =
-      key.includes("SECRET") || key.includes("KEY")
-        ? "***"
-        : value.length > 40
-          ? value.substring(0, 40) + "..."
-          : value;
-    console.log(`  ${key}=${displayValue}`);
-  }
-
-  // Validate required vars
-  if (!envVars.VITE_APP_ID || envVars.VITE_APP_ID === "YOUR_APP_ID_GOES_HERE") {
-    console.error(`\n[deploy] Error: VITE_APP_ID is not set in ${envFileName}`);
-    console.error(
-      "[deploy] Please set your Primitive App ID from the admin console"
-    );
-    process.exit(1);
-  }
-
-  // Run build with the appropriate mode
-  // Vite uses --mode to determine which .env file to load
-  // --mode production loads .env.production, --mode test loads .env.test, etc.
-  console.log(`\n[deploy] Building for ${env}...`);
-  try {
-    await runCommand("pnpm", ["build-only", "--mode", env]);
-  } catch (error) {
-    console.error("[deploy] Build failed:", error.message);
-    process.exit(1);
-  }
-
-  // Build wrangler --var flags from .env file
-  const varFlags = [];
-  for (const [envKey, wranglerKey] of Object.entries(ENV_TO_WRANGLER_VARS)) {
-    if (envVars[envKey]) {
-      varFlags.push("--var", `${wranglerKey}:${envVars[envKey]}`);
+  if (args.positional !== null) {
+    if (args.deployEnv !== null && args.deployEnv !== args.positional) {
+      fail(
+        `Conflicting deploy environments: "${args.positional}" (positional) and "${args.deployEnv}" (--deploy-env).`,
+        "",
+        USAGE,
+      );
     }
+    console.warn(
+      `[deploy] Deprecated: the bare "${args.positional}" argument now means ` +
+        `--deploy-env ${args.positional}. Pass it explicitly; it used to select the ` +
+        `Primitive environment too, which is now --primitive-env.`,
+    );
+    args.deployEnv = args.positional;
   }
 
-  // Deploy with wrangler
-  console.log("\n[deploy] Deploying to Cloudflare Workers...");
-  console.log(
-    "[deploy] Passing vars to worker:",
-    Object.values(ENV_TO_WRANGLER_VARS).join(", ")
-  );
+  if (!args.deployEnv || !args.primitiveEnv) {
+    const missing = [
+      !args.deployEnv ? "--deploy-env" : null,
+      !args.primitiveEnv ? "--primitive-env" : null,
+    ].filter(Boolean);
+    fail(`Missing required option(s): ${missing.join(", ")}`, "", USAGE);
+  }
 
+  assertPassthroughIsSafe(args.passthrough);
+  assertNoIdentityOverrides(args.deployEnv);
+  assertPairing(args.deployEnv, args.primitiveEnv);
+
+  const env = readPrimitiveEnvironment(args.primitiveEnv);
+
+  const buildArgs = ["build-only", "--mode", args.deployEnv];
+  const buildEnv = { PRIMITIVE_ENV: env.name };
+  const wranglerArgs = [
+    "dlx",
+    "wrangler",
+    "deploy",
+    "--env",
+    args.deployEnv,
+    "--var",
+    `APP_ID:${env.appId}`,
+    "--var",
+    `API_ORIGIN:${env.apiUrl}`,
+    ...args.passthrough,
+  ];
+
+  console.log("");
+  console.log(`[deploy] Deploy environment:    ${args.deployEnv}  (Vite mode + wrangler [env.${args.deployEnv}])`);
+  console.log(`[deploy] Primitive environment: ${env.name}`);
+  console.log(`[deploy]   apiUrl:  ${env.apiUrl}`);
+  console.log(`[deploy]   appId:   ${env.appId}`);
+  console.log(`[deploy]   appName: ${env.appName ?? "(unset)"}`);
+  console.log(`[deploy]   config:  ${env.configPath}`);
+  console.log("");
+
+  if (args.check) {
+    console.log("[deploy] --check: nothing will be built or deployed.");
+    console.log(`[deploy] build:    pnpm ${buildArgs.join(" ")}`);
+    console.log(`[deploy] build env: PRIMITIVE_ENV=${buildEnv.PRIMITIVE_ENV}`);
+    console.log(`[deploy] deploy:   pnpm ${wranglerArgs.join(" ")}`);
+    return;
+  }
+
+  console.log(`[deploy] Building for deploy environment "${args.deployEnv}"...`);
   try {
-    await runCommand("pnpm", [
-      "dlx",
-      "wrangler",
-      "deploy",
-      "--env",
-      env,
-      ...varFlags,
-      ...wranglerArgs,
-    ]);
+    await runCommand("pnpm", buildArgs, buildEnv);
   } catch (error) {
-    console.error("[deploy] Deploy failed:", error.message);
-    process.exit(1);
+    fail(`Build failed: ${error.message}`);
+  }
+
+  console.log("\n[deploy] Deploying to Cloudflare Workers...");
+  try {
+    await runCommand("pnpm", wranglerArgs);
+  } catch (error) {
+    fail(`Deploy failed: ${error.message}`);
   }
 
   console.log("\n[deploy] Deployment complete!");

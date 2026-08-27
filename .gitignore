@@ -4,7 +4,15 @@ node_modules/
 
 src/models/generated/
 
-# Primitive CLI local state (per-env tokens, sync backups/snapshots)
+# Tool state written by this app's own scripts:
+# `pnpm lint` (eslint --cache) and `pnpm cf-deploy` (wrangler)
+.eslintcache
+.wrangler/
+
+# Primitive CLI local state (per-env tokens, this machine's environment
+# selection, sync backups/snapshots). .primitive/config.json IS committed —
+# it is the single source of truth for the backend URL and app ID.
 .primitive/credentials.json
+.primitive/local.json
 .primitive/sync-backups/
 .primitive/sync/**/.snapshots/

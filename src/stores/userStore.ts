@@ -14,7 +14,11 @@ import type {
   StatusChangedEvent,
   UserProfile,
 } from "js-bao-wss-client";
-import { AUTH_CODES, AuthError } from "js-bao-wss-client";
+import {
+  AUTH_CODES,
+  AuthError,
+  googleWebClientAvailable,
+} from "js-bao-wss-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { useTheme } from "../composables/useTheme";
@@ -39,14 +43,21 @@ export interface AuthConfig {
   mode: "public" | "invite-only" | "domain";
   /** Whether waitlist is enabled for invite-only apps */
   waitlistEnabled: boolean;
-  /** Whether Google OAuth is configured and usable */
-  hasOAuth: boolean;
+  /**
+   * Whether THIS (browser) client can start Google sign-in: the provider is
+   * enabled and the `web` client entry is usable (#2891). Google registers a
+   * client per platform, so there is no single server-side flag to read — an
+   * app configured only for iOS is not available here.
+   */
+  googleAvailable: boolean;
   /** Whether passkeys are fully configured (enabled + rpId + rpName) */
   hasPasskey: boolean;
-  /** Whether magic link authentication is enabled */
-  magicLinkEnabled: boolean;
-  /** Whether OTP (one-time code) authentication is enabled */
-  otpEnabled: boolean;
+  /**
+   * Whether email sign-in is available (#2884). ONE flag: one request sends
+   * one email carrying a code and, when a link can be issued, a link — so
+   * there is no method to enable, choose, or fall back to.
+   */
+  emailSignInEnabled: boolean;
 }
 
 /**
@@ -89,13 +100,6 @@ export interface PasskeyInfo {
   deviceName: string;
   createdAt: string;
   lastUsedAt?: string;
-}
-
-/**
- * Result from requesting an OTP code.
- */
-export interface OtpRequestResult {
-  ok: boolean;
 }
 
 /**
@@ -392,7 +396,8 @@ export const useUserStore = defineStore("user", () => {
       try {
         const client = await jsBaoClientService.getClientAsync();
         const config = await client.getAuthConfig();
-        const configWithOtp = config as typeof config & {
+        const configCompat = config as typeof config & {
+          emailSignInEnabled?: boolean;
           otpEnabled?: boolean;
         };
         authConfig.value = {
@@ -400,10 +405,19 @@ export const useUserStore = defineStore("user", () => {
           name: config.name,
           mode: config.mode as "public" | "invite-only" | "domain",
           waitlistEnabled: config.waitlistEnabled,
-          hasOAuth: config.hasOAuth,
+          // The SAME predicate `login()` re-checks below, computed once from
+          // the client map. Before #2891 the button read `hasOAuth` and
+          // `login()` gated on `hasWebOAuth`, so a native-only configuration
+          // rendered a Google button that threw on click.
+          googleAvailable: googleWebClientAvailable(config),
           hasPasskey: config.hasPasskey,
-          magicLinkEnabled: config.magicLinkEnabled ?? true,
-          otpEnabled: configWithOtp.otpEnabled ?? false,
+          // #2884: one flag. A client running against a server that predates
+          // the unified flow derives it from the pair it replaced.
+          emailSignInEnabled:
+            typeof configCompat.emailSignInEnabled === "boolean"
+              ? configCompat.emailSignInEnabled
+              : (config.magicLinkEnabled ?? true) ||
+                (configCompat.otpEnabled ?? false),
         };
         cfgLogger.debug("Auth config loaded:", authConfig.value);
       } catch (e: unknown) {
@@ -428,8 +442,8 @@ export const useUserStore = defineStore("user", () => {
    */
   const login = async (continueURL?: string): Promise<void> => {
     const client = await jsBaoClientService.getClientAsync();
-    const hasOAuth = await client.checkOAuthAvailable();
-    if (!hasOAuth) throw new Error("OAuth is not available");
+    const googleAvailable = await client.checkOAuthAvailable();
+    if (!googleAvailable) throw new Error("OAuth is not available");
     const inviteToken = getPendingInviteToken() ?? undefined;
     await client.startOAuthFlow(continueURL, { inviteToken });
   };
@@ -579,27 +593,30 @@ export const useUserStore = defineStore("user", () => {
   // ---------------------------------------------------------------------------
 
   /**
-   * Request a magic link to be sent to the specified email address.
+   * Request ONE email sign-in email (#2884): it carries a 6-digit code and,
+   * when `redirectUri` is supplied and the app allow-lists it, a sign-in
+   * link. The user finishes with either.
    *
-   * @param email - Email address to send the magic link to
-   * @param redirectUri - Optional URI to redirect to after verification
+   * @param email - Email address to sign in
+   * @param redirectUri - Where the link should land; without a usable one the
+   *   email carries the code alone
    * @returns Result indicating success
    * @throws AuthError if request fails (e.g., INVITATION_REQUIRED, DOMAIN_NOT_ALLOWED)
    */
-  const requestMagicLink = async (
+  const requestEmailSignIn = async (
     email: string,
     redirectUri?: string
   ): Promise<MagicLinkRequestResult> => {
-    const magicLogger = logger.forScope("requestMagicLink");
-    magicLogger.debug("Requesting magic link for:", email);
+    const emailLogger = logger.forScope("requestEmailSignIn");
+    emailLogger.debug("Requesting email sign-in for:", email);
 
     try {
       const client = await jsBaoClientService.getClientAsync();
-      await client.magicLinkRequest(email, { redirectUri });
-      magicLogger.debug("Magic link request successful");
+      await client.emailSignInRequest(email, { redirectUri });
+      emailLogger.debug("Email sign-in request successful");
       return { ok: true };
     } catch (err: unknown) {
-      magicLogger.error("Magic link request failed:", err);
+      emailLogger.error("Email sign-in request failed:", err);
       throw err;
     }
   };
@@ -706,32 +723,8 @@ export const useUserStore = defineStore("user", () => {
   };
 
   // ---------------------------------------------------------------------------
-  // OTP (One-Time Code) Authentication
+  // Finishing email sign-in with the code half of the email (#2884)
   // ---------------------------------------------------------------------------
-
-  /**
-   * Request a one-time code to be sent to the specified email address.
-   * The code is valid for 10 minutes. Rate limits apply (5 codes per email
-   * per hour, 20 per IP per hour).
-   *
-   * @param email - Email address to send the code to
-   * @returns Result indicating success
-   * @throws AuthError if request fails (e.g., OTP_NOT_ENABLED, RATE_LIMITED)
-   */
-  const requestOtp = async (email: string): Promise<OtpRequestResult> => {
-    const otpLogger = logger.forScope("requestOtp");
-    otpLogger.debug("Requesting OTP for:", email);
-
-    try {
-      const client = await jsBaoClientService.getClientAsync();
-      await client.otpRequest(email);
-      otpLogger.debug("OTP request successful");
-      return { ok: true };
-    } catch (err: unknown) {
-      otpLogger.error("OTP request failed:", err);
-      throw err;
-    }
-  };
 
   /**
    * Verify a one-time code and authenticate the user.
@@ -1634,11 +1627,10 @@ export const useUserStore = defineStore("user", () => {
     handleOAuthCallback,
     logout,
 
-    // magic link
-    requestMagicLink,
+    // email sign-in (#2884) — one request, one email, both credentials
+    requestEmailSignIn,
 
-    // otp (one-time code)
-    requestOtp,
+    // finishing the sign-in: the code half of the same email
     verifyOtp,
 
     // passkey

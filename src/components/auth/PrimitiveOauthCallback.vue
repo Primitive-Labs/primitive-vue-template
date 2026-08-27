@@ -292,8 +292,8 @@ async function handleResendLink(): Promise<void> {
     const separator = baseRedirectUri.includes("?") ? "&" : "?";
     const redirectUriWithState = `${baseRedirectUri}${separator}state=${encodeURIComponent(state)}`;
 
-    await user.requestMagicLink(expiredLinkEmail.value, redirectUriWithState);
-    resendLogger.debug("Magic link resent successfully");
+    await user.requestEmailSignIn(expiredLinkEmail.value, redirectUriWithState);
+    resendLogger.debug("Sign-in email resent successfully");
     callbackState.value = "link-resent";
   } catch (err: unknown) {
     resendLogger.error("Failed to resend magic link:", err);

@@ -9,7 +9,7 @@ For platform concepts and API reference (auth flows, models, sharing, collection
 The Primitive CLI (`primitive-admin`) is required for app setup, OAuth/origin configuration, and on-demand documentation. Install once, globally:
 
 ```bash
-npm install -g primitive-admin
+pnpm add -g primitive-admin   # or: npm install -g primitive-admin
 primitive login
 primitive use "<Your App Name>"
 primitive whoami    # confirm app + server endpoint
@@ -30,7 +30,7 @@ primitive guides get <topic>    # fetch a specific guide
 npx create-primitive-app my-app
 ```
 
-This signs you in to your Primitive account, creates the app on the platform, scaffolds this template, and pre-populates `.env` with your `VITE_APP_ID`.
+This signs you in to your Primitive account, creates the app on the platform, scaffolds this template, and writes `.primitive/config.json` with a `dev` Primitive environment bound to the new app.
 
 ### 2. Run it
 
@@ -63,7 +63,7 @@ Visit `http://localhost:5173`.
 - Tailwind 4 with `tw-animate-css`
 
 ### Data layer
-- `js-bao` v2 codegen wired up — edit `src/models/models.toml`, run `pnpm codegen`, import from `@/models`
+- `js-bao` v2 codegen wired up — edit the schema `pnpm codegen` reads (`src/models/models.toml` here), run `pnpm codegen`, import from `@/models`
 - `UserPref` ships as an example model and powers user-prefs storage in `userStore`
 - `useJsBaoDataLoader` composable: debounced query + auto-resubscribe on model changes
 
@@ -92,7 +92,7 @@ src/
 ├── config/         envConfig.ts — read VITE_* vars
 ├── layouts/        AppLayout, LoginLayout
 ├── lib/            inviteToken, logger, routeOrUrl, utils
-├── models/         models.toml + *.generated.ts + barrel index.ts
+├── models/         models.toml (unless the app's schema is shared above this client) + *.generated.ts + barrel index.ts
 ├── pages/          HomePage, LoginPage, InviteAcceptPage, NotFoundPage
 ├── router/         routes.ts (createPrimitiveRouter), primitiveRouter.ts
 ├── stores/         userStore (auth + user prefs)
@@ -104,7 +104,7 @@ src/
 
 ## Adding a Model
 
-1. Add a `[models.<name>]` section to `src/models/models.toml`.
+1. Add a `[models.<name>]` section to the schema the `codegen` script names with `-i` — `src/models/models.toml` here, or a shared `models/models.toml` above this directory when this client is one of several against one Primitive app. There is one schema per app, never a copy: its TOML keys are the wire field names.
 2. Run `pnpm codegen` to regenerate the `*.generated.ts` files.
 3. Register the new class in `src/models/index.ts` (the barrel uses `attachAndRegisterModel` to bind each class to its TOML schema).
 4. Import from `@/models` anywhere — the barrel registers all models as a side effect on first import.
@@ -124,7 +124,7 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm type-check` | `vue-tsc --build` |
 | `pnpm lint` | ESLint with `--fix --cache` |
 | `pnpm format` / `pnpm format:check` | Prettier write / check |
-| `pnpm cf-deploy <env>` | Build and deploy to Cloudflare Workers (see below) |
+| `pnpm cf-deploy --deploy-env <name> --primitive-env <name>` | Build and deploy to Cloudflare Workers (see below) |
 | `pnpm clean` / `pnpm clean-modules` | Remove `dist/` / `node_modules` + lockfile |
 
 ## Running Harness Tests Headlessly (CI)
@@ -146,9 +146,11 @@ document/model lifecycle natively in Node.
    ```
 
    Then any `you+primitivetest-<suffix>@yourdomain.com` address signs in with
-   code `000000` and auto-provisions a test user. Use a **stable suffix** per
-   CI project (e.g. `you+primitivetest-ci@yourdomain.com`) so runs reuse one
-   test user instead of creating new ones.
+   code `000000` and auto-provisions a test user — the bare base address
+   (`you@yourdomain.com`) is never a test account and always fails sign-in.
+   Use a **stable suffix** per CI project (e.g.
+   `you+primitivetest-ci@yourdomain.com`) so runs reuse one test user instead
+   of creating new ones.
 
 2. **`ws`** must be installed (it is a devDependency of this template) — the
    js-bao client needs it for WebSockets in Node.
@@ -159,6 +161,20 @@ document/model lifecycle natively in Node.
 PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test
 ```
 
+To run against another environment, pass vitest's `--mode` and keep a matching
+`.env.<mode>` file — **without a `--` separator**:
+
+```bash
+PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test --mode staging
+```
+
+> `pnpm test -- --mode staging` does **not** work. vitest discards every argument
+> after a bare `--`, so the mode flag (and any positional test filter) is
+> dropped and the run silently loads the default `.env` — the suite passes
+> green against the wrong backend and writes test data there. Log
+> `import.meta.env.MODE` and `import.meta.env.VITE_API_URL` from a test if you
+> need to confirm which environment a run used.
+
 For CI systems that consume JUnit output:
 
 ```bash
@@ -167,9 +183,18 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
 
 ### Notes
 
-- App IDs and server URLs come from `.env` (`VITE_APP_ID`, `VITE_API_URL`,
-  `VITE_WS_URL`) via `src/tests/primitive-tests.spec.ts`; override per run
-  with vitest `--mode` and the matching `.env.<mode>` file.
+- The app ID and server URLs come from the selected Primitive environment in
+  `.primitive/config.json`, filled in by the `primitiveEnv()` plugin and read
+  through `import.meta.env` in `src/tests/primitive-tests.spec.ts`. Point a
+  run at a different backend with `primitive env use <name>` or
+  `PRIMITIVE_ENV=<name> pnpm test`; vitest `--mode` selects the `.env.<mode>`
+  file for app behavior only.
+- Because the two are independent, `PRIMITIVE_ENV=dev pnpm test --mode alpha`
+  is a run against `dev` with alpha's app behavior — and it signs in and writes
+  data there. If a mode's keys only make sense against one backend, declare
+  `VITE_EXPECTED_PRIMITIVE_ENV` in its `.env.<mode>` (see
+  [Pinning a mode to a Primitive environment](#pinning-a-mode-to-a-primitive-environment))
+  and a mismatched run stops at config time, before sign-in.
 - Tests that return a score (`"passed/total (pct%)"`) fail the run when below
   a full score, so parity-style suites actually gate CI. The browser panel
   shows the same result as "scored" without failing.
@@ -185,22 +210,85 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
   symmetrically declare `environment: "node"` and the browser panel skips
   them. Tests without the flag run in both contexts.
 
-## Configuration: `.env` Files
+## Configuration
 
-App settings live in environment-specific `.env` files. The template ships with `.env` (development) and `.env.production`.
+Two files, two different jobs.
+
+### Identity: `.primitive/config.json`
+
+The backend URL and app ID are typed **once**, here. `primitive init` writes
+it; every `primitive` command reads it; and the `primitiveEnv()` Vite plugin
+fills `VITE_APP_ID`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_APP_NAME` and
+`VITE_PRIMITIVE_ENV` into the build from it (`VITE_WS_URL` is derived from the
+API URL by scheme swap — never authored).
+
+```bash
+primitive env list                 # what this project knows about
+primitive env use prod             # point THIS machine at one
+primitive env add alpha --api-url https://alpha.primitiveapi.com --app-id app_...
+```
+
+`primitive env use` writes `.primitive/local.json`, which is gitignored — your
+choice of backend never shows up as a file change. The committed
+`defaultEnvironment` stays the team default a fresh clone resolves.
+
+Name entries after the backend/app pair they point at (`prod`, `prod-test`,
+`alpha`), not after a build stage — the build stage is the other axis.
+
+### App behavior: `.env` files
+
+The template ships `.env` (development) and `.env.production`. These carry no
+identity at all:
 
 | Variable | Purpose |
 |---|---|
-| `VITE_APP_ID` | Your Primitive app ID. Pre-populated by `create-primitive-app`. |
-| `VITE_API_URL` | Primitive API origin (default `https://primitiveapi.com`) |
-| `VITE_WS_URL` | Primitive WebSocket origin (default `wss://primitiveapi.com`) |
-| `VITE_APP_NAME` | App name shown in the UI (login page, browser tab) |
 | `VITE_OAUTH_REDIRECT_URI` | OAuth callback URL — must match what's configured with the OAuth provider and the Primitive admin |
 | `VITE_ENABLE_AUTH_PROXY` | Enable the auth proxy (recommended `false` in dev, `true` in prod) |
 | `VITE_LOG_LEVEL` | One of `debug`, `info`, `warn`, `error` |
 | `VITE_BASE_URL` | Public base URL — used to generate links (e.g. invitation URLs) |
 
-To add a new environment (e.g. `staging`), copy `.env.production` to `.env.staging` and edit the values.
+Setting an identity key here still wins for local dev (with a warning), as an
+escape hatch for CI. A deploy rejects it outright.
+
+### Pinning a mode to a Primitive environment
+
+The two axes are independent on purpose — a production front end against the
+alpha backend is a real combination. But when a mode's keys are only correct
+against one backend (a per-environment resource ID, a shared database ULID),
+the wrong pairing is silent: the app runs one backend's identity with another
+backend's configuration and simply misbehaves.
+
+Say which environment the mode belongs to, in that mode's `.env` file:
+
+```dotenv
+# .env.alpha
+VITE_EXPECTED_PRIMITIVE_ENV=alpha
+```
+
+Any run whose Primitive environment resolves to something else now fails at
+startup, naming both halves and where each came from — `pnpm dev`, `pnpm
+build`, `pnpm cf-deploy`, and `pnpm test` alike, because all four resolve the
+environment through the same plugin:
+
+```
+PRIMITIVE_ENV=dev pnpm test --mode alpha    # stops before signing in
+```
+
+- **Opt-in.** No declaration (the default) keeps the axes fully independent.
+- A value in the base `.env` is the default for every mode; `.env.<mode>`
+  overrides it, and an empty value there switches the check off for that mode.
+- `VITE_EXPECTED_PRIMITIVE_ENV=<name>` in the shell wins over the files — which
+  is how you run a cross-wired pair on purpose: state it and the environment
+  together, `VITE_EXPECTED_PRIMITIVE_ENV=dev PRIMITIVE_ENV=dev pnpm test --mode
+  alpha`.
+- The pure-env CI hatch still applies: a build that supplies both
+  `VITE_APP_ID` and `VITE_API_URL` itself resolves nothing, so there is nothing
+  to check. Overriding just one of them does *not* skip the check — the other
+  half still comes from the resolved environment.
+- `pnpm cf-deploy` checks the declaration against `--primitive-env` before it
+  builds or prints a plan. It reads `.env*` from the project root; if you have
+  moved Vite's `envDir`, a real deploy still fails inside the build, but
+  `--check` will not see the declaration.
 
 ## Optional: Set Up Git
 
@@ -245,7 +333,20 @@ primitive apps origins add https://your-production-domain.com
 
 ## Deploying to Production
 
-The template deploys to Cloudflare Workers via `wrangler.toml` + `scripts/deploy.mjs`. App config (`VITE_APP_ID`, `VITE_API_URL`) is read from `.env.{environment}` and forwarded to the worker as `--var APP_ID:...` / `--var API_ORIGIN:...` at deploy time, so there's a single source of truth across dev and prod.
+The template deploys to Cloudflare Workers via `wrangler.toml` +
+`scripts/deploy.mjs`. A deploy names **two independent things**, and neither
+is inferred from the other:
+
+| Flag | Selects | Which means |
+|---|---|---|
+| `--deploy-env <name>` | the deploy environment | the Vite mode (`.env.<name>`) **and** the `[env.<name>]` block in `wrangler.toml` |
+| `--primitive-env <name>` | the Primitive environment | the backend/app pair in `.primitive/config.json` |
+
+They cross in practice — a production front end against the alpha backend, or
+dev and prod builds that both hit `primitiveapi.com` with different app IDs —
+so omitting either is an error. The app ID and API origin reach the worker as
+`--var APP_ID:...` / `--var API_ORIGIN:...`, read from the Primitive
+environment rather than from any `.env` file.
 
 ### 1. Prerequisites
 
@@ -271,18 +372,19 @@ pattern = "your-domain.com"
 custom_domain = true
 ```
 
-### 3. Edit `.env.production`
-
-Set at least:
+### 3. Edit `.env.production` (app behavior only)
 
 ```bash
-VITE_APP_ID=your_production_app_id
 VITE_OAUTH_REDIRECT_URI=https://my-app-prod.your-subdomain.workers.dev/oauth/callback
 VITE_BASE_URL=https://my-app-prod.your-subdomain.workers.dev
 VITE_ENABLE_AUTH_PROXY="true"
 ```
 
-The deploy script will refuse to deploy if `VITE_APP_ID` still equals the `YOUR_APP_ID_GOES_HERE` placeholder.
+Do **not** add `VITE_APP_ID` / `VITE_API_URL` / `VITE_WS_URL` /
+`VITE_APP_NAME` here. The deploy refuses to run when it finds one, in a `.env`
+file or in your shell — the app ID comes from the Primitive environment you
+name with `--primitive-env`. (If this app was scaffolded by an older CLI,
+deleting those lines is the whole migration.)
 
 ### 4. Register the production URL with Primitive
 
@@ -294,18 +396,28 @@ primitive apps origins add https://my-app-prod.your-subdomain.workers.dev
 ### 5. Deploy
 
 ```bash
-pnpm cf-deploy production
+pnpm cf-deploy --deploy-env production --primitive-env prod
+```
+
+Print the resolved pair and the exact commands without running them:
+
+```bash
+pnpm cf-deploy --deploy-env production --primitive-env prod --check
 ```
 
 Pass extra wrangler flags after `--`:
 
 ```bash
-pnpm cf-deploy production -- --dry-run
+pnpm cf-deploy --deploy-env production --primitive-env prod -- --dry-run
 ```
 
 ## Adding More Environments
 
-1. Add an environment block to `wrangler.toml`:
+The two axes are extended separately.
+
+### A new deploy environment (another front end)
+
+1. Add a block to `wrangler.toml`:
 
    ```toml
    [env.test]
@@ -316,12 +428,20 @@ pnpm cf-deploy production -- --dry-run
    REFRESH_PROXY_COOKIE_PATH = "/proxy/"
    ```
 
-2. Create `.env.test` with the test configuration.
+2. Create `.env.test` with app behavior for that build (no identity keys).
 
-3. Deploy:
+3. Deploy it against whichever backend you want:
 
    ```bash
-   pnpm cf-deploy test
+   pnpm cf-deploy --deploy-env test --primitive-env prod
    ```
 
-The deploy script reads `.env.{environment}` and uses the matching `[env.{environment}]` block.
+### A new Primitive environment (another backend/app)
+
+```bash
+primitive env add alpha --api-url https://alpha.primitiveapi.com --app-id app_...
+primitive env use alpha            # for local dev
+pnpm cf-deploy --deploy-env production --primitive-env alpha
+```
+
+Nothing in `wrangler.toml` or `.env.*` changes for a new backend.

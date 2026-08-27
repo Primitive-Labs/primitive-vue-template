@@ -12,7 +12,7 @@ import {
   WebAuthnAbortService,
 } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
-import { ArrowLeft, Clock, KeyRound, Loader2, Lock, Mail } from "@lucide/vue";
+import { ArrowLeft, Clock, Loader2, Lock, Mail } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { getPendingInviteToken } from "@/lib/inviteToken";
@@ -52,20 +52,13 @@ export interface LoginLinks {
 
 type LoginState =
   | "initial"
-  | "sending-link"
-  | "link-sent"
-  | "sending-otp"
-  | "otp-code-entry"
+  | "sending-email"
+  // One "check your email" state (#2884): the same email carries the code and
+  // the link, so there is nothing to branch on here either.
+  | "email-sent"
   | "verifying-otp"
   | "waitlisted"
   | "error";
-
-/**
- * Email authentication method.
- * - `magic_link`: User receives a clickable link in their email (default)
- * - `one_time_code`: User receives a 6-digit code to enter in the app
- */
-type EmailAuthMethod = "magic_link" | "one_time_code";
 
 interface Props {
   /**
@@ -86,12 +79,6 @@ interface Props {
    * parameter is present. Used only if `defaultContinueUrl` is not provided.
    */
   defaultContinueRoute?: string;
-  /**
-   * Which email authentication method to use.
-   * - `magic_link` (default): User receives a clickable link in their email
-   * - `one_time_code`: User receives a 6-digit code to enter in the app
-   */
-  emailAuthMethod?: EmailAuthMethod;
   /**
    * Named onboarding route that runs profile completion + passkey prompt for
    * new users. When set, in-app sign-ins (OTP, passkey conditional UI) route
@@ -134,42 +121,17 @@ const supportsPasskeyAutofill = ref(false);
 // Computed properties
 const authConfig = computed(() => user.authConfig);
 
-/**
- * Determines the effective email auth method to use.
- * Falls back if the requested method isn't enabled.
- */
-const effectiveEmailAuthMethod = computed((): EmailAuthMethod | null => {
-  const config = authConfig.value;
-  if (!config) return null;
-
-  const requested = props.emailAuthMethod ?? "magic_link";
-
-  if (requested === "one_time_code") {
-    // OTP requested - use it if enabled, otherwise fall back to magic link
-    if (config.otpEnabled) return "one_time_code";
-    if (config.magicLinkEnabled) {
-      logger.warn("OTP requested but not enabled; falling back to magic link");
-      return "magic_link";
-    }
-    return null;
-  }
-
-  // Magic link requested (default)
-  if (config.magicLinkEnabled) return "magic_link";
-  if (config.otpEnabled) {
-    logger.warn("Magic link requested but not enabled; falling back to OTP");
-    return "one_time_code";
-  }
-  return null;
-});
-
 const showEmailForm = computed(() => {
-  // Show email form if either email auth method is available
-  return effectiveEmailAuthMethod.value !== null;
+  // One flag (#2884): email sign-in is one flow, so it is available or it is
+  // not — no method to select and nothing to fall back to.
+  return authConfig.value?.emailSignInEnabled ?? false;
 });
 
 const showGoogleButton = computed(() => {
-  return authConfig.value?.hasOAuth ?? false;
+  // One predicate, shared with `login()` (#2891): the store computes
+  // `googleAvailable` with the same rule the client's `checkOAuthAvailable()`
+  // uses, so a rendered button can always be clicked.
+  return authConfig.value?.googleAvailable ?? false;
 });
 
 /**
@@ -245,9 +207,14 @@ const magicLinkRedirectUri = computed(() => {
   const callbackUrl = config?.oauthRedirectUri;
 
   if (!callbackUrl) {
-    // No callback URL configured - magic links won't work
+    // No callback URL configured. Sign-in still works — the server sends the
+    // same email with the code alone — so this is a warning, not an error, and
+    // the sent view says "if that email also has a link" rather than promising
+    // one. Link issuance is fail-closed on the server too: an empty
+    // `[auth].emailRedirectUris` allow-list yields the same code-only email,
+    // and a request cannot tell which happened.
     logger.warn(
-      "No oauthRedirectUri configured in js-bao config. Magic links will not work."
+      "No oauthRedirectUri configured in js-bao config. Sign-in emails will carry the code only, with no link."
     );
     return undefined;
   }
@@ -374,51 +341,33 @@ async function handleEmailSubmit(): Promise<void> {
     return;
   }
 
-  const method = effectiveEmailAuthMethod.value;
-  logger.debug("Submitting email", { email: email.value, method });
+  logger.debug("Submitting email", { email: email.value });
 
   // Cancel any ongoing passkey conditional UI (aborts the pending WebAuthn ceremony)
   WebAuthnAbortService.cancelCeremony();
 
-  if (method === "one_time_code") {
-    await handleOtpRequest();
-  } else {
-    await handleMagicLinkRequest();
-  }
+  await handleEmailSignInRequest();
 }
 
-async function handleMagicLinkRequest(): Promise<void> {
+/**
+ * One request (#2884). The email that arrives carries a 6-digit code and — as
+ * long as this app's callback is on the server's allow-list — a sign-in link,
+ * so the single "check your email" state offers both.
+ */
+async function handleEmailSignInRequest(): Promise<void> {
   try {
-    loginState.value = "sending-link";
+    loginState.value = "sending-email";
     isLoading.value = true;
     error.value = null;
 
-    await user.requestMagicLink(email.value, magicLinkRedirectUri.value);
+    await user.requestEmailSignIn(email.value, magicLinkRedirectUri.value);
 
-    logger.debug("Magic link sent successfully");
+    logger.debug("Sign-in email sent successfully");
     sentEmail.value = email.value;
-    loginState.value = "link-sent";
-  } catch (e: unknown) {
-    handleEmailAuthError(e, "Failed to send sign-in link. Please try again.");
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-async function handleOtpRequest(): Promise<void> {
-  try {
-    loginState.value = "sending-otp";
-    isLoading.value = true;
-    error.value = null;
-
-    await user.requestOtp(email.value);
-
-    logger.debug("OTP sent successfully");
-    sentEmail.value = email.value;
-    loginState.value = "otp-code-entry";
+    loginState.value = "email-sent";
     startResendCooldown(30);
   } catch (e: unknown) {
-    handleEmailAuthError(e, "Failed to send code. Please try again.");
+    handleEmailAuthError(e, "Failed to send sign-in email. Please try again.");
   } finally {
     isLoading.value = false;
   }
@@ -443,7 +392,7 @@ async function handleOtpVerify(): Promise<void> {
     proceedAfterAuth(result.isNewUser ?? false, result.promptAddPasskey);
   } catch (e: unknown) {
     logger.error("OTP verification error", e);
-    loginState.value = "otp-code-entry";
+    loginState.value = "email-sent";
 
     if (e instanceof AuthError) {
       if (e.code === "OTP_MAX_ATTEMPTS") {
@@ -473,9 +422,9 @@ async function handleResendOtp(): Promise<void> {
     error.value = null;
     otpCode.value = "";
 
-    await user.requestOtp(sentEmail.value);
+    await user.requestEmailSignIn(sentEmail.value, magicLinkRedirectUri.value);
 
-    logger.debug("OTP resent successfully");
+    logger.debug("Sign-in email resent successfully");
     startResendCooldown(30);
   } catch (e: unknown) {
     logger.error("OTP resend error", e);
@@ -912,69 +861,37 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Link Sent State (Magic Link) -->
+        <!-- Email Sent State — one email, both credentials (#2884) -->
         <div
-          v-else-if="loginState === 'link-sent'"
-          class="flex flex-col items-center gap-6 text-center"
-        >
-          <div
-            class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10"
-          >
-            <Mail class="h-8 w-8 text-primary" />
-          </div>
-
-          <div class="space-y-2">
-            <h2 class="text-xl font-semibold">Check your email</h2>
-            <p class="text-muted-foreground text-sm">
-              We sent a sign-in link to
-              <span class="font-medium text-foreground">{{ sentEmail }}</span>
-            </p>
-            <p class="text-muted-foreground text-xs">
-              Click the link in the email to continue. The link expires in 15
-              minutes.
-            </p>
-          </div>
-
-          <Button
-            v-if="showOpenMailButton"
-            as="a"
-            href="message://"
-            class="w-full gap-2"
-          >
-            <Mail class="h-4 w-4" />
-            Open Mail
-          </Button>
-
-          <Button
-            variant="ghost"
-            @click="resetToInitial"
-            class="gap-2 text-muted-foreground"
-          >
-            <ArrowLeft class="h-4 w-4" />
-            Back to sign in
-          </Button>
-        </div>
-
-        <!-- OTP Code Entry State -->
-        <div
-          v-else-if="loginState === 'otp-code-entry'"
+          v-else-if="loginState === 'email-sent'"
           class="flex flex-col gap-6"
         >
           <div class="flex flex-col items-center gap-4 text-center">
             <div
               class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10"
             >
-              <KeyRound class="h-8 w-8 text-primary" />
+              <Mail class="h-8 w-8 text-primary" />
             </div>
 
             <div class="space-y-2">
-              <h2 class="text-xl font-semibold">Enter your code</h2>
+              <h2 class="text-xl font-semibold">Check your email</h2>
               <p class="text-muted-foreground text-sm">
-                We sent a 6-digit code to
+                We sent a sign-in email to
                 <span class="font-medium text-foreground">{{ sentEmail }}</span>
               </p>
             </div>
           </div>
+
+          <Button
+            v-if="showOpenMailButton"
+            as="a"
+            href="message://"
+            variant="outline"
+            class="w-full gap-2"
+          >
+            <Mail class="h-4 w-4" />
+            Open Mail
+          </Button>
 
           <!-- Error display -->
           <div
@@ -1022,9 +939,9 @@ onUnmounted(() => {
               class="text-sm text-muted-foreground"
             >
               <template v-if="resendCooldown > 0">
-                Resend code in {{ resendCooldown }}s
+                Resend email in {{ resendCooldown }}s
               </template>
-              <template v-else> Resend code </template>
+              <template v-else> Resend email </template>
             </Button>
 
             <Button
@@ -1070,22 +987,13 @@ onUnmounted(() => {
           </Button>
         </div>
 
-        <!-- Sending Link State -->
+        <!-- Sending State -->
         <div
-          v-else-if="loginState === 'sending-link'"
+          v-else-if="loginState === 'sending-email'"
           class="flex flex-col items-center gap-6 text-center"
         >
           <Loader2 class="animate-spin h-10 w-10 text-primary" />
-          <p class="text-muted-foreground">Sending sign-in link...</p>
-        </div>
-
-        <!-- Sending OTP State -->
-        <div
-          v-else-if="loginState === 'sending-otp'"
-          class="flex flex-col items-center gap-6 text-center"
-        >
-          <Loader2 class="animate-spin h-10 w-10 text-primary" />
-          <p class="text-muted-foreground">Sending verification code...</p>
+          <p class="text-muted-foreground">Sending sign-in email...</p>
         </div>
 
         <!-- Verifying OTP State -->
