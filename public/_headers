@@ -1,0 +1,15 @@
+# Response headers for static assets (Cloudflare Workers static assets).
+#
+# Vite copies everything in public/ into dist/ verbatim, and the deploy serves
+# dist/ as the asset directory — so this file ships with the build and applies
+# to the paths below. worker.js is library-provided and is never the place for
+# this; see AGENTS.md.
+
+# Apple fetches this document at exactly this path, with no extension, and
+# rejects anything that is not JSON — an extensionless asset is served as
+# text/plain otherwise. Only matters once the app has renamed
+# .well-known/apple-app-site-association.example to the real name; until then
+# the path is not an asset at all and the SPA fallback answers it, which is why
+# the applinks entitlement goes last (see .well-known/README.md).
+/.well-known/apple-app-site-association
+  Content-Type: application/json

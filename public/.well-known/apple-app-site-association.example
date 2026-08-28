@@ -1,0 +1,17 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["TEAMID.BUNDLEID"],
+        "components": [
+          {
+            "/": "/oauth/callback",
+            "?": { "magic_token": "*" },
+            "comment": "emailed sign-in link: only WITH a magic_token, so the Google OAuth ?code= redirect on this same path stays a web page"
+          }
+        ]
+      }
+    ]
+  },
+  "webcredentials": { "apps": ["TEAMID.BUNDLEID"] }
+}
