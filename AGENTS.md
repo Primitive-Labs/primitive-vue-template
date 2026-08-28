@@ -16,6 +16,7 @@
 - `/src/router`: Vue-router configuration
 - `/src/stores`: Pinia stores (userStore). The template ships only `userStore` for identity and user prefs. Document, sharing, and collection state should be managed by the app — call `client.documents.*`, `client.collections.*`, etc. directly or build a small store that suits your app's data model. The demo app under `primitive-app-demo` shows examples for each surface.
 - `/src/tests`: Tests registered with the primitive-app test harness.
+- `/public`: Copied verbatim into `dist/` by Vite. `_headers` sets response headers on those assets (Cloudflare Workers static assets read it) — the one place for that, since `worker.js` is library-provided. `.well-known/apple-app-site-association.example` is the file that lets an iOS client of this same app open this domain's links: the emailed sign-in link is one `https://<domain>/oauth/callback` URL that opens the app where it is installed and signs in here otherwise. `.well-known/README.md` has the activation order — rename, deploy, verify with `curl`, and only then enable the app's `applinks:` entitlement.
 
 ## General Coding Guidelines
 
