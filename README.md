@@ -11,8 +11,7 @@ The Primitive CLI (`primitive-admin`) is required for app setup, OAuth/origin co
 ```bash
 pnpm add -g primitive-admin   # or: npm install -g primitive-admin
 primitive login
-primitive use "<Your App Name>"
-primitive whoami    # confirm app + server endpoint
+primitive whoami    # confirm app + server endpoint (the app this project's environment names)
 ```
 
 For platform documentation, query the CLI directly rather than searching elsewhere:

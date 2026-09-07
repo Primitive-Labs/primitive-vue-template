@@ -2,12 +2,21 @@ dist/
 node_modules/
 .DS_Store
 
-src/models/generated/
+# NOTE: nothing generated is ignored (#3078). `js-bao-codegen-v2` emits
+# `src/models/*.generated.ts` and the CLI emits `src/types/generated/**`; all of
+# it is committed, reviewed and tested like any other source, and `dev`,
+# `build`, `test` and `cf-deploy` all regenerate it.
 
 # Tool state written by this app's own scripts:
 # `pnpm lint` (eslint --cache) and `pnpm cf-deploy` (wrangler)
 .eslintcache
 .wrangler/
+
+# Written by `pnpm cf-deploy` from the deployed environment's `iosAppId`, one
+# environment at a time — committing it would put one environment's bundle id
+# in every other environment's diff. The `.example` reference and a
+# `.hand-authored` sentinel are tracked; only this exact path is not.
+public/.well-known/apple-app-site-association
 
 # Primitive CLI local state (per-env tokens, this machine's environment
 # selection, sync backups/snapshots). .primitive/config.json IS committed —

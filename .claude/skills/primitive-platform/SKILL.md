@@ -73,14 +73,15 @@ Confirm you're targeting the correct environment:
 **To switch environments** for a one-off command, pass `--env <name>`. To point this machine at
 a different environment, run `primitive env use <name>` (local state; the committed
 `defaultEnvironment` is unchanged). To switch the *app* an env points at, edit the env's
-`appId` in `.primitive/config.json` (or re-run `primitive env add`). `primitive use <app>` is a
-no-op when the active env already pins an `appId`.
+`appId` in `.primitive/config.json`. Every environment names exactly one app, and there is no
+per-machine app selection that could differ from it.
 
 ### Branch B — no `.primitive/config.json` (project mode NOT set up)
 
 Without project config the CLI silently falls back to global state in `~/.primitive/credentials.json`
-(legacy mode). Commands run against whatever app/server happens to be globally active — which the
-agent didn't set and the user may have forgotten about. **This is a footgun, not a supported way to
+(legacy mode). Commands there name no app at all — every app-scoped command needs an explicit
+`--app`, against whatever server happens to be globally active, which the agent didn't set and the
+user may have forgotten about. **This is a footgun, not a supported way to
 work inside a project.** Do not proceed silently, and do not treat the global fallback as the
 default path.
 
@@ -91,7 +92,7 @@ against global state" option — make setting up project config the clear, recom
 First gather the context you'll propose (so the prompt is concrete, not abstract):
 
 ```bash
-primitive whoami   # current global server + app, if any — shows what the fallback WOULD target
+primitive whoami   # current global server — shows what the fallback WOULD target
 ```
 
 Then prompt the user, e.g.:
@@ -186,8 +187,9 @@ When writing Primitive code:
 
 1. **Follow the patterns from the fetched guides exactly** — method names, argument order, lifecycle patterns
 2. **Use `primitive config`** for all backend configuration (workflows, prompts, integrations, databases)
-3. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name). A case file's name is its identity: `config pull` writes it back under that name and renaming it renames the case, so the checked-in tree reconciles on a fresh clone instead of duplicating
-4. **Run `pnpm codegen`** after creating or modifying js-bao models
+3. **Server functions are TypeScript in the config tree** — `functions/<key>.toml` states the gate, the `entry` and the limits, the code sits beside it, and `primitive config push` builds the bundle (npm deps inlined, `primitive-functions` left to the platform) and ships it with the authored source bytes. Relative and absolute imports must stay inside the config tree; npm packages are imported by name. A function's key is unique per app ACROSS workflows, functions, scripts and webhooks — one namespace
+4. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name). A case file's name is its identity: `config pull` writes it back under that name and renaming it renames the case, so the checked-in tree reconciles on a fresh clone instead of duplicating
+5. **Run `pnpm codegen`** after creating or modifying js-bao models
 
 ## Step 4: Post-Code Review (Automatic)
 
@@ -278,15 +280,17 @@ primitive cron-triggers disable <id>
 primitive webhooks disable <id>
 primitive integrations disable <key>
 primitive prompts disable <key>
+primitive functions disable <id>        # a pushed server function
 primitive users disable <user-id>       # a person, not an object — reversible
 primitive feature-flags disable <key>   # super-admin platform toggle
 
 # Retiring an object (soft delete; NOT the same as disable)
-primitive workflows archive <key>       # same verb on the five types that carry
+primitive workflows archive <key>       # same verb on the six types that carry
 primitive cron-triggers archive <id>    # `archived`; confirms first, -y skips
 primitive webhooks archive <id>
 primitive integrations archive <id>     # the ID column of `integrations list`
 primitive prompts archive <id>          # the ID column of `prompts list`
+primitive functions archive <id>        # the ID column of `functions list`
 
 # Common operations
 primitive apps list                # List apps on the active env's server
@@ -295,15 +299,26 @@ primitive apps create "Name"       # Create an app (does NOT auto-bind to an env
 ```
 
 **Availability is not configuration.** Whether a workflow, cron trigger,
-webhook, integration or prompt is in service is one server-owned `status`
-field, changed only by `<noun> enable|disable` (or the matching console
-action) and by the delete flow, whose CLI spelling is `<noun> archive` on those
-same five types. It is not a TOML key: `config pull` does not emit it,
+webhook, integration, prompt or server function is in service is one
+server-owned `status` field, changed only by `<noun> enable|disable` (or the
+matching console action) and by the delete flow, whose CLI spelling is
+`<noun> archive` on those same six types. It is not a TOML key: `config pull` does not emit it,
 `config push` never sends it, and a file that still carries a `status` line
 fails the push with a message naming the verbs. So a push cannot put something back in service
 that an operator took out of it, and a fresh environment stood up from config
-has everything active. Anything newly created or pushed is active; there is no
-`draft` state on any object.
+has everything active. Anything newly CREATED is active; there is no `draft`
+state on any object. For a server function, creation is the only writer of
+`active`: a `config push` to a disabled function updates its code and leaves it
+out of service, so shipping a fix never puts a public endpoint back in service
+on its own.
+
+The keys spelled `status` that ARE yours are the per-VERSION ones: a prompt's
+`[[configs]] status`, and a workflow named config's `[config] status` in its
+`workflows/<key>.configs/<name>.toml` sidecar. They say which named version is
+retired, not whether the object is serving. For a prompt, `config pull` writes
+the line only for a config that is retired (`status = "archived"`); an omitted
+line means `active`, so an ordinary pulled prompt file carries no `status` at
+all. A workflow config sidecar still states its own either way.
 
 **`archive` retires, `--prune` destroys.** `<noun> archive <id>` writes the
 third value, `archived`: the delete lifecycle rather than availability. The row
@@ -345,6 +360,7 @@ primitive analytics events                             # app activity events
 primitive analytics workflows --window-days 7          # top workflows by runs
 primitive analytics prompts --window-days 7            # top prompts by executions
 primitive analytics integrations                       # calls, error rate, latency
+primitive analytics workflow-usage                     # step kinds configured, and their runs
 
 # Blob storage
 primitive blob-buckets list                            # buckets in the app (app-scoped: no selector)
