@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
  * Regenerate the typed database and workflow surfaces from this app's SYNCED
- * server config — the `.primitive/sync/<env>/<appId>/` export tree.
+ * server config — the committed `primitive/<env>/` tree.
  *
- * Why a script and not a shell one-liner in `package.json`: the sync tree sits
- * beside `.primitive/config.json`, and that config is not always in this
+ * Why a script and not a shell one-liner in `package.json`: the tree sits
+ * beside `primitive/config.json`, and that config is not always in this
  * directory. One Primitive app can have several clients (a web client and a
  * native client in sibling directories), in which case the project config and
- * its sync export live at the REPO ROOT and this package is one client inside
- * it. A client-relative `ls .primitive/sync/*​/*​/…` guard never matches there,
+ * its export live at the REPO ROOT and this package is one client inside
+ * it. A client-relative `ls primitive/*​/…` guard never matches there,
  * so both codegens were skipped silently and every build compiled whatever
  * generated code happened to be in the tree.
  *
- * So: walk up to the nearest `.primitive/config.json` (the way git finds
- * `.git`, and the way the CLI itself resolves the project) and glob the sync
+ * So: walk up to the nearest `primitive/config.json` (the way git finds
+ * `.git`, and the way the CLI itself resolves the project) and glob the
  * tree beside it. A standalone scaffold's nearest ancestor is itself, which is
  * exactly the old behavior.
  *
@@ -38,7 +38,7 @@ import { dirname, join, resolve } from "node:path";
 function findProjectRoot(from) {
   let dir = resolve(from);
   for (;;) {
-    if (existsSync(join(dir, ".primitive", "config.json"))) return dir;
+    if (existsSync(join(dir, "primitive", "config.json"))) return dir;
     const parent = dirname(dir);
     // Stop at the filesystem root rather than looping forever.
     if (parent === dir) return null;
@@ -68,8 +68,8 @@ function readJson(path) {
 }
 
 /**
- * The environment and app slot the CLI itself will resolve, or `null` when no
- * single one can be determined.
+ * The environment the CLI itself will resolve, or `null` when no single one
+ * can be determined.
  *
  * The order is the CLI's: PRIMITIVE_ENV, then `.primitive/local.json` (written
  * by `primitive env use`), then the committed `defaultEnvironment`, then a sole
@@ -77,7 +77,7 @@ function readJson(path) {
  * here on purpose — the CLI reports that properly, with the available names.
  */
 function resolveSelection(projectRoot) {
-  const config = readJson(join(projectRoot, ".primitive", "config.json"));
+  const config = readJson(join(projectRoot, "primitive", "config.json"));
   if (!config) return null;
   const environments = config.environments;
   if (!environments || typeof environments !== "object") return null;
@@ -95,40 +95,34 @@ function resolveSelection(projectRoot) {
   const name = candidate ?? (names.length === 1 ? names[0] : null);
   if (!name || !Object.prototype.hasOwnProperty.call(environments, name)) return null;
 
-  const appId = environments[name]?.appId;
-  return { name, appId: typeof appId === "string" ? appId : null };
+  return { name };
 }
 
-/** True when `<syncRoot>/<env>/<appId>/<kind>/` holds at least one `.toml`. */
-function kindHasToml(syncRoot, env, appId, kind) {
+/** True when `<treeRoot>/<env>/<kind>/` holds at least one `.toml`. */
+function kindHasToml(treeRoot, env, kind) {
   try {
-    return readdirSync(join(syncRoot, env, appId, kind)).some((name) =>
+    return readdirSync(join(treeRoot, env, kind)).some((name) =>
       name.endsWith(".toml"),
     );
   } catch {
-    // No such directory for this app — nothing synced.
+    // No such directory for this environment — nothing synced.
     return false;
   }
 }
 
 /**
- * True when the SELECTED environment's app slot has `kind` synced.
+ * True when the SELECTED environment has `kind` synced.
  *
- * Two deliberate fallbacks. An environment with no `appId` scopes to the
- * environment and accepts any app slot inside it. And when no single
- * environment resolves at all — several defined, none selected — the guard
- * widens back to every environment, so an app that really does have TOMLs
- * invokes the CLI and gets the CLI's own resolver error rather than a silent
- * skip of work the developer asked for.
+ * One deliberate fallback: when no single environment resolves at all —
+ * several defined, none selected — the guard widens back to every environment,
+ * so an app that really does have TOMLs invokes the CLI and gets the CLI's own
+ * resolver error rather than a silent skip of work the developer asked for.
+ * `primitive/config.json` is not a directory, so it is never read as an env.
  */
-function hasSyncedToml(syncRoot, kind, selection) {
-  const environments = selection ? [selection.name] : subdirectories(syncRoot);
+function hasSyncedToml(treeRoot, kind, selection) {
+  const environments = selection ? [selection.name] : subdirectories(treeRoot);
   for (const env of environments) {
-    const slots =
-      selection?.appId != null ? [selection.appId] : subdirectories(join(syncRoot, env));
-    for (const appId of slots) {
-      if (kindHasToml(syncRoot, env, appId, kind)) return true;
-    }
+    if (kindHasToml(treeRoot, env, kind)) return true;
   }
   return false;
 }
@@ -153,14 +147,14 @@ function runPrimitive(args) {
 // generate, and nothing to fail about.
 const projectRoot = findProjectRoot(process.cwd());
 if (projectRoot) {
-  const syncRoot = join(projectRoot, ".primitive", "sync");
+  const treeRoot = join(projectRoot, "primitive");
   const selection = resolveSelection(projectRoot);
 
-  if (hasSyncedToml(syncRoot, "database-type-configs", selection)) {
+  if (hasSyncedToml(treeRoot, "database-type-configs", selection)) {
     runPrimitive(["databases", "codegen", "-o", "src/types/generated"]);
   }
 
-  if (hasSyncedToml(syncRoot, "workflows", selection)) {
+  if (hasSyncedToml(treeRoot, "workflows", selection)) {
     runPrimitive(["workflows", "codegen", "-o", "src/types/generated/workflows"]);
   }
 }

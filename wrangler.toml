@@ -5,12 +5,12 @@
 #
 # The worker's APP_ID and API_ORIGIN are NOT authored here or in a .env file.
 # They come from the Primitive environment named on the deploy command, which
-# reads .primitive/config.json — the one place the backend URL and app ID are
+# reads primitive/config.json — the one place the backend URL and app ID are
 # typed — and passes them at deploy time via --var flags.
 #
 # A deploy names two independent things:
 #   --deploy-env <name>     this file's [env.<name>] section, and the Vite mode
-#   --primitive-env <name>  the backend/app pair in .primitive/config.json
+#   --primitive-env <name>  the backend/app pair in primitive/config.json
 #
 # To deploy: pnpm cf-deploy --deploy-env production --primitive-env prod
 # =============================================================================
@@ -28,7 +28,7 @@ not_found_handling = "single-page-application"
 # PRODUCTION ENVIRONMENT
 # =============================================================================
 # Deploy with: pnpm cf-deploy --deploy-env production --primitive-env <name>
-# App behavior from: .env.production   |   Identity from: .primitive/config.json
+# App behavior from: .env.production   |   Identity from: primitive/config.json
 # =============================================================================
 [env.production]
 name = "YOUR APP NAME HERE-prod"
@@ -45,7 +45,7 @@ REFRESH_PROXY_COOKIE_MAX_AGE = "604800"
 REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 
 # Note: APP_ID and API_ORIGIN come from the Primitive environment named by
-# --primitive-env (an entry in .primitive/config.json) and are passed to
+# --primitive-env (an entry in primitive/config.json) and are passed to
 # wrangler via --var flags by the deploy script. Do not duplicate them here,
 # and never put them in a .env file — a deploy rejects that outright.
 
@@ -62,7 +62,7 @@ REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 #    REFRESH_PROXY_COOKIE_PATH = "/proxy/"
 #
 # 2. Create .env.test with app behavior for that build (no app ID — identity
-#    comes from .primitive/config.json)
+#    comes from primitive/config.json)
 #
 # 3. Deploy it against whichever backend you want:
 #    pnpm cf-deploy --deploy-env test --primitive-env <name>

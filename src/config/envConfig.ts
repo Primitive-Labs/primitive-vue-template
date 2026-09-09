@@ -109,10 +109,10 @@ if (missingVars.length > 0) {
   console.error("Missing required Primitive configuration:", missingVars);
 
   // These come from the selected Primitive environment in
-  // .primitive/config.json, filled in at build time by the primitiveEnv()
+  // primitive/config.json, filled in at build time by the primitiveEnv()
   // Vite plugin — not from a .env file.
   console.error(
-    "appId / apiUrl / wsUrl come from .primitive/config.json. Check that the " +
+    "appId / apiUrl / wsUrl come from primitive/config.json. Check that the " +
       "project has one and that an environment is selected: " +
       "`primitive env list`, then `primitive env use <name>`."
   );

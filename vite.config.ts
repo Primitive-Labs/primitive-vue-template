@@ -10,7 +10,7 @@ import vueDevTools from "vite-plugin-vue-devtools";
 // https://vite.dev/config/
 export default defineConfig(() => {
   // The Primitive environment (backend URL + app ID) is resolved by this
-  // plugin from .primitive/config.json — the one place it is typed. Select it
+  // plugin from primitive/config.json — the one place it is typed. Select it
   // with `primitive env use <name>`, or `--primitive-env` on a deploy.
   //
   // The resolution deliberately happens INSIDE the plugin, not at the top of

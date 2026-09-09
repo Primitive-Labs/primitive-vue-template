@@ -2,7 +2,7 @@
 
 interface ImportMetaEnv {
   // Filled in at build time by the primitiveEnv() plugin from the selected
-  // Primitive environment in .primitive/config.json — do not author these in
+  // Primitive environment in primitive/config.json — do not author these in
   // a .env file.
   readonly VITE_APP_ID: string;
   readonly VITE_API_URL: string;

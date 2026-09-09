@@ -19,9 +19,6 @@ node_modules/
 public/.well-known/apple-app-site-association
 
 # Primitive CLI local state (per-env tokens, this machine's environment
-# selection, sync backups/snapshots). .primitive/config.json IS committed —
-# it is the single source of truth for the backend URL and app ID.
-.primitive/credentials.json
-.primitive/local.json
-.primitive/sync-backups/
-.primitive/sync/**/.snapshots/
+# selection, snapshot backups). One rule, no exception: `.primitive/` is
+# machine-local, `primitive/` is the committed configuration tree.
+.primitive/

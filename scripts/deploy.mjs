@@ -12,7 +12,7 @@
  *                           environment (`[env.<name>]` in wrangler.toml).
  *
  *   --primitive-env <name>  WHICH BACKEND / APP. A key in
- *                           `.primitive/config.json`, supplying apiUrl,
+ *                           `primitive/config.json`, supplying apiUrl,
  *                           appId and appName.
  *
  * They cross in practice — a production front end against the alpha backend, a
@@ -30,7 +30,7 @@
  *   pnpm cf-deploy --deploy-env production --primitive-env prod --check
  *   pnpm cf-deploy --deploy-env production --primitive-env prod -- --dry-run
  *
- * `.primitive/config.json` is the ONLY place the backend URL and app ID are
+ * `primitive/config.json` is the ONLY place the backend URL and app ID are
  * typed. This script reads them from there and passes them to the worker as
  * `--var APP_ID` / `--var API_ORIGIN`; the build gets `PRIMITIVE_ENV` so the
  * `primitiveEnv()` Vite plugin resolves the same environment. An identity key
@@ -42,13 +42,13 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = resolve(__dirname, "..");
 
-/** Schema version of `.primitive/config.json` this script understands. */
+/** Schema version of `primitive/config.json` this script understands. */
 const CONFIG_VERSION = 1;
 
 /**
@@ -85,7 +85,7 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
 /**
  * The CLI's `iosAppId` and `webUrl` rules, restated for the two readers below.
  *
- * `.primitive/config.json` is committed and hand-edited — the README says so
+ * `primitive/config.json` is committed and hand-edited — the README says so
  * for an environment that already exists — so a value that never went through
  * `primitive env add` is the normal case, not the exotic one. This script is
  * the LAST check before a document reaches Apple, and it is the only one on
@@ -149,7 +149,7 @@ const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> 
   --deploy-env <name>     Which front end: the Vite mode and the wrangler.toml
                           [env.<name>] section. e.g. production
   --primitive-env <name>  Which backend/app: an environment in
-                          .primitive/config.json. e.g. prod, alpha
+                          primitive/config.json. e.g. prod, alpha
   --check                 Print the resolved pair and the exact commands, then exit.
 
 Both are required — neither is inferred from the other.
@@ -199,17 +199,46 @@ function parseArgs(argv) {
   return parsed;
 }
 
-/** Finds `.primitive/config.json`, honoring the PRIMITIVE_PROJECT_CONFIG override. */
+/** The docs-site slug of the migration procedure (#3153). */
+const MIGRATION_GUIDE_SLUG = "getting-started/cli-project-migration";
+
+/**
+ * Refuses a project still holding the pre-#3153 layout.
+ *
+ * The same message the CLI and the Swift pre-build script give, so a project
+ * that has not been migrated fails identically wherever it is deployed from.
+ * There is no fallback read of the old tree.
+ */
+function failStaleLayout(detail) {
+  fail(
+    detail,
+    "The Primitive configuration tree moved out of the hidden directory: the config is now",
+    "primitive/config.json and each environment's TOML is at primitive/<env>/, while",
+    ".primitive/ keeps only machine-local state. Nothing is read from either tree until the",
+    `project is migrated — follow ${MIGRATION_GUIDE_SLUG}.`,
+  );
+}
+
+/** Finds `primitive/config.json`, honoring the PRIMITIVE_PROJECT_CONFIG override. */
 function findProjectConfigPath() {
   const override = process.env.PRIMITIVE_PROJECT_CONFIG;
   if (override) {
     const forced = resolve(override);
+    // Checked before the file is read: the override bypasses the walk, so
+    // without this it would be the one way past the cutover.
+    if (basename(dirname(forced)) === ".primitive") {
+      failStaleLayout(
+        `PRIMITIVE_PROJECT_CONFIG points at ${forced}, inside a .primitive/ directory.`,
+      );
+    }
     return existsSync(forced) ? forced : null;
   }
   let current = ROOT_DIR;
   for (;;) {
-    const candidate = join(current, ".primitive", "config.json");
+    const candidate = join(current, "primitive", "config.json");
     if (existsSync(candidate)) return candidate;
+    const legacy = join(current, ".primitive", "config.json");
+    if (existsSync(legacy)) failStaleLayout(`${legacy} still exists.`);
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
@@ -221,10 +250,22 @@ function readPrimitiveEnvironment(name) {
   const configPath = findProjectConfigPath();
   if (!configPath) {
     fail(
-      "No .primitive/config.json found for this project.",
+      "No primitive/config.json found for this project.",
       "It is the single source of truth for the backend URL and app ID.",
       "Run 'primitive init' to create one, or 'primitive env add <name> --api-url ... --app-id ...'.",
     );
+  }
+
+  // Half-migrated: the new anchor is here, but the old tree survives beside it.
+  const projectRoot =
+    basename(dirname(configPath)) === "primitive"
+      ? dirname(dirname(configPath))
+      : dirname(configPath);
+  for (const stale of [
+    join(projectRoot, ".primitive", "sync"),
+    join(projectRoot, ".primitive", "config.json"),
+  ]) {
+    if (existsSync(stale)) failStaleLayout(`${stale} still exists.`);
   }
 
   let config;
@@ -265,7 +306,7 @@ function readPrimitiveEnvironment(name) {
   if (typeof entry.appId !== "string" || !entry.appId.trim()) {
     fail(
       `Primitive environment "${name}" in ${configPath} has no "appId".`,
-      `Every environment names exactly one app — add "appId": "<app-id>" to that environment in .primitive/config.json.`,
+      `Every environment names exactly one app — add "appId": "<app-id>" to that environment in primitive/config.json.`,
       `Find the app id in the Primitive admin UI, with 'primitive apps list' run from a directory outside this project,`,
       `or as the residual "currentAppId" in .primitive/credentials.json if this environment was ever pointed at an app`,
       `by the retired per-machine app selection.`,
@@ -374,7 +415,7 @@ function resolveBuildEnvValue(key, deployEnv) {
 
 /**
  * A deploy is strict about identity: the build must take it from
- * `.primitive/config.json`, and the worker vars below come from the same
+ * `primitive/config.json`, and the worker vars below come from the same
  * place. An identity key anywhere the build would see it means the two could
  * disagree, so it stops the deploy. There is no override flag — remove the
  * key. (This is also the migration step for an app scaffolded by an older CLI,
@@ -399,10 +440,10 @@ function assertNoIdentityOverrides(deployEnv) {
   if (found.length === 0) return;
 
   fail(
-    "Identity keys must not be set for a deploy — they would compete with .primitive/config.json:",
+    "Identity keys must not be set for a deploy — they would compete with primitive/config.json:",
     ...found.map(({ key, where }) => `  ${key} (in ${where})`),
     "",
-    "Remove them. The backend URL and app ID are typed once, in .primitive/config.json,",
+    "Remove them. The backend URL and app ID are typed once, in primitive/config.json,",
     "and reach the build through the primitiveEnv() Vite plugin. If this app was",
     "scaffolded by an older CLI, deleting these lines from your .env files is the",
     "whole migration.",
@@ -446,7 +487,7 @@ function assertPairing(deployEnv, primitiveEnv) {
  */
 function renderAssociationDocument(env) {
   const comment =
-    `${AASA_MARKER} from .primitive/config.json ("${env.name}") — do not edit; ` +
+    `${AASA_MARKER} from primitive/config.json ("${env.name}") — do not edit; ` +
     `see public/.well-known/README.md. The query constraint claims only the emailed sign-in link.`;
   return (
     JSON.stringify(
