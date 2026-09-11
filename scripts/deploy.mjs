@@ -249,10 +249,13 @@ function findProjectConfigPath() {
 function readPrimitiveEnvironment(name) {
   const configPath = findProjectConfigPath();
   if (!configPath) {
+    // The remedy names `primitive init` and nothing else (#3154): `env add`
+    // now requires a project config to already exist, so offering it here
+    // would send the reader at a command this very failure blocks.
     fail(
       "No primitive/config.json found for this project.",
       "It is the single source of truth for the backend URL and app ID.",
-      "Run 'primitive init' to create one, or 'primitive env add <name> --api-url ... --app-id ...'.",
+      "Run 'primitive init' to create one.",
     );
   }
 

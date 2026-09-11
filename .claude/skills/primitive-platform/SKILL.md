@@ -32,8 +32,10 @@ named environments (`dev`, `prod`, `staging`, …), where each environment binds
 (gitignored). There is no global "currently active app" — the active environment determines the
 server *and* the app.
 
-The legacy global fallback (`~/.primitive/credentials.json`) exists only for one-off use outside a
-project. **Inside a project, treat its absence as a setup gap to fix, not a mode to operate in.**
+There is no global fallback. Outside a project only `primitive login` and `primitive init` work
+(plus `logout`, login's inverse, and `bootstrap`, which creates the first admin on a fresh server);
+every other command stops with an error naming the missing `primitive/config.json`. **Treat a
+missing project config as a setup gap to fix, not a mode to operate in.**
 
 **Before running any CLI commands**, your *first* check is whether the project is in project mode:
 
@@ -76,59 +78,44 @@ a different environment, run `primitive env use <name>` (local state; the commit
 `appId` in `.primitive/config.json`. Every environment names exactly one app, and there is no
 per-machine app selection that could differ from it.
 
-### Branch B — no `.primitive/config.json` (project mode NOT set up)
+### Branch B — no project config (project mode NOT set up)
 
-Without project config the CLI silently falls back to global state in `~/.primitive/credentials.json`
-(legacy mode). Commands there name no app at all — every app-scoped command needs an explicit
-`--app`, against whatever server happens to be globally active, which the agent didn't set and the
-user may have forgotten about. **This is a footgun, not a supported way to
-work inside a project.** Do not proceed silently, and do not treat the global fallback as the
-default path.
+Without a project config there is nothing to run against. Every app-scoped command (`whoami`,
+`apps list`, `config pull`, …) exits non-zero with an error naming the missing
+`primitive/config.json` and pointing at `primitive init`. The CLI does not fall back to
+`~/.primitive/credentials.json` or any other global state, and no flag points a command at another
+directory's tree — so there is no "proceed against global state" option to offer, and `--app`,
+`--env` or environment variables do not change what the error does.
 
-**Your default action is to set up project mode.** Stop and prompt the user to create the project
-config before doing anything else. Don't bury the recommendation behind an equal-weight "or proceed
-against global state" option — make setting up project config the clear, recommended next step.
+**Your default action is to get into a project.** Stop and work out with the user which of the two
+supported flows applies before doing anything else:
 
-First gather the context you'll propose (so the prompt is concrete, not abstract):
+1. **This repo is (or should become) a Primitive project that was never scaffolded** — run
+   `primitive init` at the repo root. `init` creates the app, writes `primitive/config.json` with a
+   `dev` environment bound to that app, and seeds that environment's credentials from the session
+   it logs you in with. It prompts before overwriting a non-empty directory, so read what it says.
+2. **The project already exists somewhere else** — `cd` into it (or any subdirectory; the CLI walks
+   up to find `primitive/config.json`) and run the command there. To reach a different app, use
+   the project whose environment names it; there is no cross-app read from outside a project.
 
-```bash
-primitive whoami   # current global server — shows what the fallback WOULD target
-```
+Prompt the user, e.g.:
 
-Then prompt the user, e.g.:
+> "This repo has no `primitive/config.json`, so the CLI has no environment to target and every
+> app-scoped command stops here. If this repo should be a Primitive project, I'll run
+> `primitive init` at the root, which creates the app and the config. If the project lives
+> elsewhere, tell me where and I'll run the commands from there. Which is it?"
 
-> "This project has no `.primitive/config.json`, so the CLI isn't in project mode. I recommend
-> setting up project-scoped config so this repo pins its own environment instead of relying on your
-> global state (currently `<server>` / `<app from whoami>`, which I didn't set). I'll add an env
-> with:
->
-> ```bash
-> primitive env add dev --api-url <url> --app-id <id>
-> ```
->
-> Does this look right, or should I adjust the env name / URL / app?"
-
-If you need the user to pick the env name, server, or app, ask them. Confirm the values before
-running `env add` — but the question to resolve is *which* project config to create, not *whether*
-to create one.
-
-`primitive env add` is additive and safe — it only writes an entry to `.primitive/config.json`
-(creating the file if needed). It does not touch source code, create apps on the server, or install
-dependencies.
-
-**Only fall back to global state if the user explicitly declines project setup** after you've
-recommended it. Even then, name the exact server/app the command will hit and get clear
-confirmation before running anything mutating (`primitive config push`, `primitive apps create`, etc.).
-A read-only command (`whoami`, `guides list`) against global state is fine while you're still
-working out the config.
+`primitive env add` does NOT create the config — it adds an environment to an existing one and
+fails with the same error outside a project. Use it once a project exists, to bind a second
+backend (`primitive env add prod --api-url <url> --app-id <id>`).
 
 Do not rely on `.env` files like `PRIMITIVE_API_URL` to control CLI targeting — those are not
-read by the CLI in project mode, and the project config is the source of truth.
+read by the CLI, and the project config is the source of truth.
 
-**Why this matters:** If the CLI is pointed at the wrong environment (e.g., prod instead of dev),
-commands like `primitive config push` will modify the wrong server. Silent fallback to global state
-makes this exact mistake easy to commit. Setting up project config is the durable fix — verify and
-surface before running mutating operations.
+**Why this matters:** If the CLI were pointed at the wrong environment (e.g., prod instead of dev),
+commands like `primitive config push` would modify the wrong server. Refusing outside a project is
+what makes that mistake impossible to commit silently: the only target a command has is the one the
+project's environment names. Verify and surface it before running mutating operations.
 
 ## Step 1: Discover Available Guides
 
@@ -187,7 +174,7 @@ When writing Primitive code:
 
 1. **Follow the patterns from the fetched guides exactly** — method names, argument order, lifecycle patterns
 2. **Use `primitive config`** for all backend configuration (workflows, prompts, integrations, databases)
-3. **Server functions are TypeScript in the config tree** — `functions/<key>.toml` states the gate, the `entry` and the limits, the code sits beside it, and `primitive config push` builds the bundle (npm deps inlined, `primitive-functions` left to the platform) and ships it with the authored source bytes. Relative and absolute imports must stay inside the config tree; npm packages are imported by name. A function's key is unique per app ACROSS workflows, functions, scripts and webhooks — one namespace
+3. **Server functions are TypeScript in the config tree** — `functions/<key>.toml` states the gate, the `entry` and the limits, the code sits beside it, and `primitive config push` builds the bundle (npm deps inlined, `primitive-functions` left to the platform) and ships it with the authored source bytes. Relative and absolute imports must stay inside the config tree; npm packages are imported by name. The push also TYPECHECKS the sources against the declarations it generates and refuses the function with the compiler's own diagnostics when they do not hold (`tsc -p functions/tsconfig.json --noEmit` reproduces it; `--no-typecheck` skips it). A function's key is unique per app ACROSS workflows, functions, scripts and webhooks — one namespace
 4. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name). A case file's name is its identity: `config pull` writes it back under that name and renaming it renames the case, so the checked-in tree reconciles on a fresh clone instead of duplicating
 5. **Run `pnpm codegen`** after creating or modifying js-bao models
 
@@ -269,10 +256,10 @@ primitive guides get <topic>       # Read a guide's default variant
 primitive guides get <topic> --language swift --platform ios   # Read a specific language/platform variant
 
 # Configuration as Code
-primitive config init --dir ./config  # Initialize config directory
-primitive config pull --dir ./config  # Pull config from server
-primitive config push --dir ./config  # Push config to server
-primitive config diff --dir ./config  # Preview changes before push
+primitive config init  # Scaffold the environment's config directory
+primitive config pull  # Pull config from server
+primitive config push  # Push config to server
+primitive config diff  # Preview changes before push
 
 # Taking something out of service (or putting it back)
 primitive workflows disable <key>       # same verb pair on every type that has one
