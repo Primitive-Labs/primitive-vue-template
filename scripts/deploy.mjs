@@ -199,23 +199,19 @@ function parseArgs(argv) {
   return parsed;
 }
 
-/** The docs-site slug of the migration procedure (#3153). */
-const MIGRATION_GUIDE_SLUG = "getting-started/cli-project-migration";
-
 /**
- * Refuses a project still holding the pre-#3153 layout.
+ * Refuses a project that never migrated off the pre-#3153 layout: a config
+ * document under `.primitive/` with no `primitive/config.json` beside it.
  *
- * The same message the CLI and the Swift pre-build script give, so a project
- * that has not been migrated fails identically wherever it is deployed from.
- * There is no fallback read of the old tree.
+ * The same one-sentence message the CLI and the Swift pre-build script give —
+ * the file found, the file expected, no document — so a project that never
+ * migrated fails identically wherever it is deployed from. Anything else left
+ * under `.primitive/` beside a migrated tree is ignored (#3392).
  */
-function failStaleLayout(detail) {
+function failUnmigratedProject(found, expected) {
   fail(
-    detail,
-    "The Primitive configuration tree moved out of the hidden directory: the config is now",
-    "primitive/config.json and each environment's TOML is at primitive/<env>/, while",
-    ".primitive/ keeps only machine-local state. Nothing is read from either tree until the",
-    `project is migrated — follow ${MIGRATION_GUIDE_SLUG}.`,
+    `Found ${found} but no ${expected}: this project still uses the retired layout ` +
+      "under .primitive/, which is never read.",
   );
 }
 
@@ -225,10 +221,12 @@ function findProjectConfigPath() {
   if (override) {
     const forced = resolve(override);
     // Checked before the file is read: the override bypasses the walk, so
-    // without this it would be the one way past the cutover.
+    // without this it would be the one way past the cutover. An override
+    // inside a `.primitive/` directory IS the old layout, named explicitly.
     if (basename(dirname(forced)) === ".primitive") {
-      failStaleLayout(
-        `PRIMITIVE_PROJECT_CONFIG points at ${forced}, inside a .primitive/ directory.`,
+      failUnmigratedProject(
+        forced,
+        join(dirname(dirname(forced)), "primitive", "config.json"),
       );
     }
     return existsSync(forced) ? forced : null;
@@ -237,8 +235,10 @@ function findProjectConfigPath() {
   for (;;) {
     const candidate = join(current, "primitive", "config.json");
     if (existsSync(candidate)) return candidate;
+    // No anchor here: the old one means an unmigrated project, and the walk
+    // stops rather than resolving whatever project the parent turns out to be.
     const legacy = join(current, ".primitive", "config.json");
-    if (existsSync(legacy)) failStaleLayout(`${legacy} still exists.`);
+    if (existsSync(legacy)) failUnmigratedProject(legacy, candidate);
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
@@ -257,18 +257,6 @@ function readPrimitiveEnvironment(name) {
       "It is the single source of truth for the backend URL and app ID.",
       "Run 'primitive init' to create one.",
     );
-  }
-
-  // Half-migrated: the new anchor is here, but the old tree survives beside it.
-  const projectRoot =
-    basename(dirname(configPath)) === "primitive"
-      ? dirname(dirname(configPath))
-      : dirname(configPath);
-  for (const stale of [
-    join(projectRoot, ".primitive", "sync"),
-    join(projectRoot, ".primitive", "config.json"),
-  ]) {
-    if (existsSync(stale)) failStaleLayout(`${stale} still exists.`);
   }
 
   let config;

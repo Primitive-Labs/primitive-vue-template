@@ -26,9 +26,9 @@ always fetch the latest from the CLI.
 ## Step 0: Verify CLI Configuration
 
 The Primitive CLI is **project-scoped**, and project mode is **strongly preferred** for any work
-inside a repo. Each project has a `.primitive/config.json` (committed to the repo) that defines
-named environments (`dev`, `prod`, `staging`, …), where each environment binds an `apiUrl` and
-(optionally) an `appId`. Per-environment auth tokens live in `.primitive/credentials.json`
+inside a repo. Each project has a `primitive/config.json` (committed to the repo) that defines
+named environments (`dev`, `prod`, `staging`, …), where each environment binds an `apiUrl` and a
+required `appId`. Per-environment auth tokens live in `.primitive/credentials.json`
 (gitignored). There is no global "currently active app" — the active environment determines the
 server *and* the app.
 
@@ -40,18 +40,18 @@ missing project config as a setup gap to fix, not a mode to operate in.**
 **Before running any CLI commands**, your *first* check is whether the project is in project mode:
 
 ```bash
-ls .primitive/config.json   # exists at project root or any ancestor?
+ls primitive/config.json   # exists at project root or any ancestor?
 ```
 
 The two branches below are not equivalent — pick the one that matches reality and follow it.
 
-### Branch A — `.primitive/config.json` exists (project mode)
+### Branch A — `primitive/config.json` exists (project mode)
 
 The active environment is resolved in this order:
 1. `--env <name>` flag on the command
 2. `PRIMITIVE_ENV` environment variable
 3. This machine's selection in `.primitive/local.json` (written by `primitive env use`, gitignored)
-4. `defaultEnvironment` in `.primitive/config.json` — the committed team default
+4. `defaultEnvironment` in `primitive/config.json` — the committed team default
 5. The sole environment, if exactly one is defined
 
 `primitive env use <name>` does NOT edit the committed config: pointing this
@@ -75,7 +75,7 @@ Confirm you're targeting the correct environment:
 **To switch environments** for a one-off command, pass `--env <name>`. To point this machine at
 a different environment, run `primitive env use <name>` (local state; the committed
 `defaultEnvironment` is unchanged). To switch the *app* an env points at, edit the env's
-`appId` in `.primitive/config.json`. Every environment names exactly one app, and there is no
+`appId` in `primitive/config.json`. Every environment names exactly one app, and there is no
 per-machine app selection that could differ from it.
 
 ### Branch B — no project config (project mode NOT set up)
@@ -230,7 +230,7 @@ PRIMITIVE_ENV=<name> <command>     # Override via env var (useful in scripts/CI)
 
 # Setup — existing project (most common: adopting Primitive in an existing repo)
 pnpm add -g primitive-admin                             # Install CLI (pnpm preferred; npm works too)
-primitive env add dev --api-url <url> --app-id <id>     # Add env to .primitive/config.json
+primitive env add dev --api-url <url> --app-id <id>     # Add env to primitive/config.json
 primitive env add prod --api-url <url> --app-id <id>    # (creates the file if missing)
 primitive login                                         # Authenticate (tokens stored per-env)
 
@@ -245,7 +245,7 @@ primitive init my-new-app --platform web,ios            # One app, a web client 
 # Setup — adding a client to an app that already exists
 primitive init ios --platform ios                       # Run INSIDE the app's repo: adds the
                                                         # client to the app the nearest ancestor
-                                                        # .primitive/config.json targets. Writes
+                                                        # primitive/config.json targets. Writes
                                                         # no nested .primitive/ or .git/ and makes
                                                         # no commit — review with `git status`.
                                                         # Read the multi-client guide first.
@@ -282,7 +282,7 @@ primitive functions archive <id>        # the ID column of `functions list`
 # Common operations
 primitive apps list                # List apps on the active env's server
 primitive apps create "Name"       # Create an app (does NOT auto-bind to an env;
-                                   # edit .primitive/config.json or use `env add` to bind)
+                                   # edit primitive/config.json or use `env add` to bind)
 ```
 
 **Availability is not configuration.** Whether a workflow, cron trigger,
@@ -486,7 +486,7 @@ or re-shown. Use it to watch activity, not as an exactly-once event log.
 If the user describes a new feature they want to build:
 
 1. **Verify CLI configuration** per Step 0 — confirm the active environment in
-   `.primitive/config.json` (and its bound `apiUrl` / `appId`) match the project's intended target
+   `primitive/config.json` (and its bound `apiUrl` / `appId`) match the project's intended target
    before running any commands
 2. **Run `primitive guides list`** to discover available topics and their `(language, platform)` combinations
 3. **Identify which guides are relevant** to their feature from the list output
