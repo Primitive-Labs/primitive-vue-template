@@ -279,6 +279,18 @@ primitive integrations archive <id>     # the ID column of `integrations list`
 primitive prompts archive <id>          # the ID column of `prompts list`
 primitive functions archive <id>        # the ID column of `functions list`
 
+# Running a server function (#3448)
+primitive functions invoke <key> --input '{"n":1}'   # request mode: run it, print the result
+primitive functions start <key> --wait               # task mode: start a run and wait for it
+primitive functions runs wait <function-id> <run-id> # wait for a run already started
+primitive functions invoke <key> --user <user-id>    # as that app user (admin/owner; token revoked after)
+primitive functions invoke <key> --as system         # no caller: ctx.user null, a manual trigger
+primitive functions logs <function-id> --invocation <id>   # the record an invoke's id names
+primitive functions logs <function-id> --run <run-id>      # one task run's records
+# invoke/start take the KEY; runs, wait, steps, terminate and logs take the ID.
+# Exit codes: 0 completed, 1 failed or refused, 124 the wait gave up, 130 Ctrl-C.
+# The wrong verb is REFUSED, never converted — on both sides.
+
 # Common operations
 primitive apps list                # List apps on the active env's server
 primitive apps create "Name"       # Create an app (does NOT auto-bind to an env;

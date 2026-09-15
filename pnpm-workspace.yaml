@@ -1,0 +1,13 @@
+minimumReleaseAgeExclude:
+  - js-bao
+  - js-bao-wss-client
+  - primitive-admin
+  - primitive-app
+
+allowBuilds:
+  esbuild: true
+  better-sqlite3: false
+  maplibre-gl: false
+  sharp: false
+  vue-demi: false
+  workerd: false

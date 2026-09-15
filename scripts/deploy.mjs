@@ -736,8 +736,13 @@ async function main() {
   // developer's local backend and ship them in the requested environment.
   const codegenArgs = ["codegen"];
   const buildEnv = { PRIMITIVE_ENV: env.name };
+  // `exec`, not `dlx`: wrangler is a pinned devDependency, already installed
+  // under this app's own build policy. `dlx` fetched a second, unpinned copy
+  // into pnpm's temporary store, where no `allowBuilds` list of the app can
+  // reach — and pnpm 10+ then refused the packages wrangler needs built
+  // (esbuild, workerd) with ERR_PNPM_IGNORED_BUILDS before wrangler ran (#3415).
   const wranglerArgs = [
-    "dlx",
+    "exec",
     "wrangler",
     "deploy",
     "--env",

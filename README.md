@@ -350,7 +350,9 @@ environment rather than from any `.env` file.
 ### 1. Prerequisites
 
 - Cloudflare account with Workers access
-- `wrangler` is installed as a dev dependency (no separate install needed)
+- `wrangler` is installed as a dev dependency (no separate install needed).
+  The deploy runs that pinned copy through `pnpm exec`, so no
+  `pnpm approve-builds` step is needed either.
 
 ### 2. Set the worker name in `wrangler.toml`
 
