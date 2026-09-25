@@ -14,7 +14,7 @@
  *   token through to magicLinkVerify / otpVerify / passkeyRegisterFinish
  *   / startOAuthFlow so the server resolves grants in one round-trip.
  */
-import { AlertTriangle, Check, Lock, Mail } from "@lucide/vue";
+import { AlertTriangle, Check, Mail } from "@lucide/vue";
 import type { Component } from "vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -38,8 +38,6 @@ type AcceptState =
   | "needs-signin"
   | "token-missing"
   | "token-invalid"
-  | "token-expired"
-  | "already-accepted"
   | "error";
 
 interface Props {
@@ -136,14 +134,8 @@ async function confirmAccept(): Promise<void> {
         ? String((err as { code: unknown }).code)
         : undefined;
 
-    if (code === "INVITE_ALREADY_ACCEPTED") {
-      acceptState.value = "already-accepted";
-      return;
-    }
-    if (code === "INVITE_TOKEN_EXPIRED") {
-      acceptState.value = "token-expired";
-      return;
-    }
+    // The server answers one code for an invalid, expired or already-redeemed
+    // token, so the page cannot (and does not) tell those apart.
     if (code === "INVITE_TOKEN_INVALID") {
       acceptState.value = "token-invalid";
       return;
@@ -287,52 +279,6 @@ onMounted(handle);
     <Button @click="continueToApp" class="w-full">Continue</Button>
   </div>
 
-  <!-- Already accepted (probably by another account) -->
-  <div
-    v-else-if="acceptState === 'already-accepted'"
-    class="w-full max-w-sm space-y-6 text-center"
-  >
-    <div
-      class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/10"
-    >
-      <Lock class="h-8 w-8 text-amber-500" />
-    </div>
-    <div class="space-y-2">
-      <h1 class="text-2xl font-semibold">Invitation already accepted</h1>
-      <p class="text-muted-foreground text-sm">
-        This invitation has already been used. If it was meant for a different
-        account, sign out and try the link again.
-      </p>
-    </div>
-    <div class="flex flex-col gap-2">
-      <Button @click="continueToApp" class="w-full">Continue to app</Button>
-      <Button @click="signOutAndRetry" variant="outline" class="w-full">
-        Sign out and try again
-      </Button>
-    </div>
-  </div>
-
-  <!-- Token expired -->
-  <div
-    v-else-if="acceptState === 'token-expired'"
-    class="w-full max-w-sm space-y-6 text-center"
-  >
-    <div
-      class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/10"
-    >
-      <AlertTriangle class="h-8 w-8 text-amber-500" />
-    </div>
-    <div class="space-y-2">
-      <h1 class="text-2xl font-semibold">Invitation expired</h1>
-      <p class="text-muted-foreground text-sm">
-        This invitation link has expired. Ask the sender to send you a new one.
-      </p>
-    </div>
-    <Button @click="continueToApp" variant="outline" class="w-full">
-      Continue
-    </Button>
-  </div>
-
   <!-- Token invalid / missing -->
   <div
     v-else-if="
@@ -357,13 +303,23 @@ onMounted(handle);
         {{
           acceptState === "token-missing"
             ? "We couldn't find an invitation token in this link."
-            : "This invitation link is invalid. Ask the sender for a new one."
+            : "This invitation link is invalid, has expired, or has already been used. If it was meant for a different account, sign out and try the link again; otherwise ask the sender for a new one."
         }}
       </p>
     </div>
-    <Button @click="continueToApp" variant="outline" class="w-full">
-      Continue
-    </Button>
+    <div class="flex flex-col gap-2">
+      <Button @click="continueToApp" variant="outline" class="w-full">
+        Continue
+      </Button>
+      <Button
+        v-if="acceptState === 'token-invalid' && user.isAuthenticated"
+        @click="signOutAndRetry"
+        variant="outline"
+        class="w-full"
+      >
+        Sign out and try again
+      </Button>
+    </div>
   </div>
 
   <!-- Generic error -->
