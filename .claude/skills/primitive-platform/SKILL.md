@@ -92,6 +92,14 @@ After writing or modifying code that touches Primitive, review it without being 
 2. Answer from the guide, with its examples. Don't guess or invent APIs.
 3. Point the user at the guide for more: `primitive guides get <topic>`.
 
+## When the user is moving an app's data to another app
+
+Fetch the `documents` guide and follow its export/import sections. A migration is two
+exports into one directory and two imports out of it, in a fixed order — the documents
+bundle, then the collections those documents sit in — and the guide has the commands, the
+order they must run in, and what does not travel. Don't run a single export or import from
+memory: the wrong order silently loses every collection's document membership.
+
 ## Upgrading Platform Libraries
 
 When the user asks to upgrade the app to a newer platform version, follow this workflow.
