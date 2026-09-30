@@ -1,508 +1,104 @@
 ---
 name: primitive-platform
 description: >
-  Expert guide for building applications on the Primitive platform. MUST be used whenever the user
-  is writing code that uses js-bao, js-bao-wss-client, primitive-app components, or any Primitive
-  platform feature (documents, databases, workflows, prompts, integrations, blobs, authentication,
-  users/groups). Also trigger whenever about to run any `primitive` CLI command (e.g., primitive config, primitive integrations, primitive apps, primitive env) to ensure Step 0 CLI verification is performed first. After writing or modifying code that touches Primitive
-  APIs, this skill cross-references the implementation against official guides and automatically
-  corrects common mistakes. Use this skill even if the user doesn't explicitly ask for it —
-  any Primitive-related code should be validated against current best practices. Also use it
-  when something looks like a platform bug or missing platform capability, to decide whether
-  (and how) to file a platform issue. Also trigger whenever the user wants to upgrade or update
-  the app to a newer platform version — bumping js-bao, js-bao-wss-client, primitive-app, or the
-  primitive CLI — which follows the "Upgrading Platform Libraries" workflow below.
+  Fetches the Primitive platform's agent guides and applies them. MUST be used whenever the user
+  is writing or reviewing code that uses js-bao, js-bao-wss-client, primitive-app,
+  primitive-functions, or any Primitive platform feature (documents, databases, server functions,
+  prompts, integrations, blobs, authentication, users/groups), and before running any `primitive`
+  CLI command. All development guidance lives in the guides this skill fetches; after writing or
+  modifying code that touches Primitive APIs, it cross-references the code against those guides
+  and corrects mistakes. Use this skill even if the user doesn't explicitly ask for it. Also use it
+  when something looks like a platform bug or missing platform capability, to record the platform
+  feedback in the app's PRIMITIVE-FEEDBACK.md. Also trigger whenever the user wants to upgrade or
+  update the app to a newer platform version — bumping js-bao, js-bao-wss-client, primitive-app, or
+  the primitive CLI — which follows the "Upgrading Platform Libraries" workflow below.
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
 
-# Primitive Platform Development Guide
+# Primitive Platform
 
-You are an expert on the Primitive platform. Your job is to help developers write correct,
-idiomatic Primitive code by leveraging the CLI's built-in guide system and enforcing best practices.
+Everything about how to build on Primitive — APIs, configuration, the CLI, patterns and
+pitfalls — lives in the **agent guides** the `primitive` CLI serves. This skill tells you how to
+get the right guides and when to read them. It deliberately teaches nothing about the platform
+itself: never write Primitive code, answer a Primitive question, or run a Primitive command from
+memory or from this file. Fetch the guide.
 
-**The CLI guides are the single source of truth.** Never hardcode or memorize guide content —
-always fetch the latest from the CLI.
+## Getting the guides
 
-## Step 0: Verify CLI Configuration
-
-The Primitive CLI is **project-scoped**, and project mode is **strongly preferred** for any work
-inside a repo. Each project has a `.primitive/config.json` (committed to the repo) that defines
-named environments (`dev`, `prod`, `staging`, …), where each environment binds an `apiUrl` and
-(optionally) an `appId`. Per-environment auth tokens live in `.primitive/credentials.json`
-(gitignored). There is no global "currently active app" — the active environment determines the
-server *and* the app.
-
-The legacy global fallback (`~/.primitive/credentials.json`) exists only for one-off use outside a
-project. **Inside a project, treat its absence as a setup gap to fix, not a mode to operate in.**
-
-**Before running any CLI commands**, your *first* check is whether the project is in project mode:
+`primitive guides` works anywhere, inside a Primitive project or not.
 
 ```bash
-ls .primitive/config.json   # exists at project root or any ancestor?
-```
-
-The two branches below are not equivalent — pick the one that matches reality and follow it.
-
-### Branch A — `.primitive/config.json` exists (project mode)
-
-The active environment is resolved in this order:
-1. `--env <name>` flag on the command
-2. `PRIMITIVE_ENV` environment variable
-3. This machine's selection in `.primitive/local.json` (written by `primitive env use`, gitignored)
-4. `defaultEnvironment` in `.primitive/config.json` — the committed team default
-5. The sole environment, if exactly one is defined
-
-`primitive env use <name>` does NOT edit the committed config: pointing this
-machine at a different backend never shows up as a file change. `env list`
-shows the resolved current environment and the committed team default
-separately, and reports a corrupt or dangling selection rather than falling
-back to the default.
-
-Confirm you're targeting the correct environment:
-
-1. **Read the CLI header.** Every command prints `Env | App | Server` at the top of its output —
-   verify these match the project's intended target.
-2. **Inspect the project config:**
-
-   ```bash
-   primitive env list           # All environments (CURRENT and TEAM DEFAULT shown separately)
-   primitive env show           # Details for the currently-resolved env
-   primitive whoami             # Authenticated user + resolved server/app
-   ```
-
-**To switch environments** for a one-off command, pass `--env <name>`. To point this machine at
-a different environment, run `primitive env use <name>` (local state; the committed
-`defaultEnvironment` is unchanged). To switch the *app* an env points at, edit the env's
-`appId` in `.primitive/config.json` (or re-run `primitive env add`). `primitive use <app>` is a
-no-op when the active env already pins an `appId`.
-
-### Branch B — no `.primitive/config.json` (project mode NOT set up)
-
-Without project config the CLI silently falls back to global state in `~/.primitive/credentials.json`
-(legacy mode). Commands run against whatever app/server happens to be globally active — which the
-agent didn't set and the user may have forgotten about. **This is a footgun, not a supported way to
-work inside a project.** Do not proceed silently, and do not treat the global fallback as the
-default path.
-
-**Your default action is to set up project mode.** Stop and prompt the user to create the project
-config before doing anything else. Don't bury the recommendation behind an equal-weight "or proceed
-against global state" option — make setting up project config the clear, recommended next step.
-
-First gather the context you'll propose (so the prompt is concrete, not abstract):
-
-```bash
-primitive whoami   # current global server + app, if any — shows what the fallback WOULD target
-```
-
-Then prompt the user, e.g.:
-
-> "This project has no `.primitive/config.json`, so the CLI isn't in project mode. I recommend
-> setting up project-scoped config so this repo pins its own environment instead of relying on your
-> global state (currently `<server>` / `<app from whoami>`, which I didn't set). I'll add an env
-> with:
->
-> ```bash
-> primitive env add dev --api-url <url> --app-id <id>
-> ```
->
-> Does this look right, or should I adjust the env name / URL / app?"
-
-If you need the user to pick the env name, server, or app, ask them. Confirm the values before
-running `env add` — but the question to resolve is *which* project config to create, not *whether*
-to create one.
-
-`primitive env add` is additive and safe — it only writes an entry to `.primitive/config.json`
-(creating the file if needed). It does not touch source code, create apps on the server, or install
-dependencies.
-
-**Only fall back to global state if the user explicitly declines project setup** after you've
-recommended it. Even then, name the exact server/app the command will hit and get clear
-confirmation before running anything mutating (`primitive config push`, `primitive apps create`, etc.).
-A read-only command (`whoami`, `guides list`) against global state is fine while you're still
-working out the config.
-
-Do not rely on `.env` files like `PRIMITIVE_API_URL` to control CLI targeting — those are not
-read by the CLI in project mode, and the project config is the source of truth.
-
-**Why this matters:** If the CLI is pointed at the wrong environment (e.g., prod instead of dev),
-commands like `primitive config push` will modify the wrong server. Silent fallback to global state
-makes this exact mistake easy to commit. Setting up project config is the durable fix — verify and
-surface before running mutating operations.
-
-## Step 1: Discover Available Guides
-
-Before writing or reviewing any Primitive code, run:
-
-```bash
-primitive guides list
-```
-
-This returns the full list of available guide topics with descriptions, keywords, and use cases.
-The `COMBINATIONS` column shows which `(language, platform)` variants each guide is available in
-(e.g. `ts; swift`). Use this output to determine which guides are relevant to the current task —
-and which language/platform variant to request in Step 2.
-
-### Determine the project's language and platform
-
-Figure out what the project you're working in targets, then request the matching variant when
-fetching guides:
-
-- A `Package.swift`, `*.xcodeproj`, or `project.yml` → `--language swift` (plus `--platform ios`
-  or `--platform macos` as appropriate).
-- A Vite/React/Node web app (`package.json`, `js-bao-wss-client`) → `--language ts --platform web`.
-
-If you can't tell, omit the flags — every guide has a default variant, so a bare
-`primitive guides get <topic>` always returns something useful.
-
-## Step 2: Fetch the Relevant Guides
-
-For each relevant topic identified in Step 1, fetch the full guide, passing the project's
-language/platform so you get the right variant:
-
-```bash
+primitive guides list                  # every topic: description, keywords, use cases, variants
 primitive guides get <topic> --language <ts|swift> --platform <web|ios|macos>
-# or, when the project's language/platform is unknown or doesn't matter:
-primitive guides get <topic>
+primitive guides get <topic>           # the topic's default variant
 ```
 
-`--language` accepts aliases (`typescript`/`javascript`/`js` → `ts`). These flags **never fail**:
-an unknown value or an unavailable combination falls back to the guide's default variant rather
-than erroring, so it's always safe to pass your best guess.
+- **Which topics.** Read the `list` output and fetch every guide whose topic the task touches.
+  A feature usually spans several (a server function that writes a database and runs a prompt
+  needs all three guides). Fetch them BEFORE writing code.
+- **Which variant.** Pass the project's language and platform. A `Package.swift`,
+  `*.xcodeproj`, or `project.yml` means `--language swift` with `--platform ios` or `macos`; a
+  web app with `package.json` and `js-bao-wss-client` means `--language ts --platform web`. The
+  `COMBINATIONS` column of `list` shows what each guide offers. The flags never fail: an unknown
+  value or unavailable combination falls back to the default variant, so pass your best guess,
+  or omit them when you can't tell. `--language` accepts `typescript`/`javascript`/`js` for `ts`.
+- **Which channel.** Outside a project the CLI serves the production guides. Inside a project it
+  serves the guides matching the server the project's current environment points at, so an app
+  on the alpha environment reads the alpha guides. The version follows the installed
+  `js-bao-wss-client`.
+- **Freshness.** Guides are cached under `~/.primitive/guides/` for 24 hours. After upgrading the
+  CLI or the libraries, pass `--refresh` on the first `list` and `get`.
+- **Where to start.** `configuration` covers projects, environments, and pushing config;
+  `data-modeling` covers choosing where data lives; `inspecting-and-debugging` covers reading a
+  running app. For a CLI command you have not used, fetch the guide for its feature first.
 
-**Always fetch guide(s) BEFORE writing code.** If multiple features are involved, fetch multiple
-guides. The guides contain:
-- Complete API documentation with method signatures
-- Working code examples in the requested language (e.g. TypeScript or Swift)
-- Common patterns and anti-patterns
-- Configuration examples (TOML files for `primitive config`)
-- Decision frameworks for architecture choices
+## Writing code
 
-**Do not guess or assume API patterns.** If you're unsure about a method signature, parameter,
-or pattern, fetch the guide. The guides are comprehensive and authoritative.
+1. Fetch the guides for every feature the change touches.
+2. Follow them exactly: method names, argument order, lifecycle, configuration shapes, and the
+   follow-up steps they name (codegen, pushing config, typechecking).
+3. Never guess an API. If the guide you have does not answer the question, fetch the related
+   guides it links before inventing anything. If none does, it is a platform gap: see "The
+   platform feedback doc" below.
+4. Before running a `primitive` command that changes server state, read the `Env | App | Server`
+   header every command prints and confirm it names the environment you intend. The
+   `configuration` guide explains projects and environments.
 
-## Step 3: Write Code Following Guide Patterns
+## Reviewing code (automatic, after every change)
 
-When writing Primitive code:
+After writing or modifying code that touches Primitive, review it without being asked:
 
-1. **Follow the patterns from the fetched guides exactly** — method names, argument order, lifecycle patterns
-2. **Use `primitive config`** for all backend configuration (workflows, prompts, integrations, databases)
-3. **Configuration lives in TOML files** in version control, pushed via `primitive config push` — including test cases, authored as sidecars at `prompts/<key>.tests/`, `workflows/<key>.tests/`, `transforms/<name>.tests/` and `integrations/<key>.tests/` (one `[test]` file per case, with its attachments in a directory of the same name). A case file's name is its identity: `config pull` writes it back under that name and renaming it renames the case, so the checked-in tree reconciles on a fresh clone instead of duplicating
-4. **Run `pnpm codegen`** after creating or modifying js-bao models
+1. **Identify the features touched.** Imports from `js-bao`, `js-bao-wss-client`,
+   `primitive-app`, or `primitive-functions`; files in the project's configuration tree; model
+   definitions and schemas.
+2. **Fetch those guides** in the project's language and platform.
+3. **Compare the code against them.** API usage, lifecycle, access and authorization, anything
+   the guide warns against, and any follow-up step the guide requires that the change skipped.
+4. **Fix what's wrong.** Cite the guide section, edit the file (don't just suggest), and name any
+   command the user still needs to run. If nothing is wrong, say so briefly.
 
-## Step 4: Post-Code Review (Automatic)
+## When the user is starting a new feature
 
-After writing or modifying Primitive-related code, **automatically perform this review**:
+1. Run `primitive guides list` and pick every relevant topic.
+2. Fetch those guides in the project's language and platform.
+3. Recommend a data model from the guides. If requirements are ambiguous, ask clarifying
+   questions first: a data model is much easier to get right up front than to migrate.
+4. Outline the implementation, citing the guide patterns it follows.
+5. Write the code, then review it as above.
 
-### 4a. Identify What Was Written
-Determine which Primitive features the new/modified code touches by scanning for:
-- Import statements from `js-bao`, `js-bao-wss-client`, or `primitive-app`
-- Primitive API calls (documents.open, databases.connect, workflows, etc.)
-- Model definitions, schemas, queries
-- Configuration files (TOML for sync)
+## When the user asks "How do I…?"
 
-### 4b. Fetch and Cross-Reference
-Run `primitive guides list` to identify which guides cover the features used, then fetch each one
-in the project's language/platform:
-```bash
-primitive guides get <topic> --language <ts|swift> --platform <web|ios|macos>
-```
+1. Find the topic with `primitive guides list`, then fetch it.
+2. Answer from the guide, with its examples. Don't guess or invent APIs.
+3. Point the user at the guide for more: `primitive guides get <topic>`.
 
-Compare the written code against the guide content:
-- **API usage patterns** — Are methods called correctly with proper arguments?
-- **Lifecycle management** — Are documents opened before queries? Is auth checked first?
-- **Access control** — Are CEL expressions or permissions configured properly?
-- **Anti-patterns** — Does the code do anything the guide explicitly warns against?
-- **Untyped workflow invocation** — Is `client.workflows.start`/`runSync` called with a string-literal `workflowKey` and a hand-typed/cast `input`/`output` (e.g. `result.output as {...}`) instead of a generated invoker? That's a finding whenever the workflow has an `inputSchema`/`outputSchema` to generate from — regenerate with `primitive workflows codegen` (`--lang swift` for iOS/macOS) and call through the factory it emits instead, per the workflows guide's "Typed invocation (codegen)" section.
-- **Missing steps** — Does the code need `pnpm codegen`, `primitive workflows codegen`, `primitive config push`, or other follow-up?
+## When the user is moving an app's data to another app
 
-### 4c. Report and Fix
-If issues are found:
-1. **Explain the issue** — cite the specific guide section that applies
-2. **Show the fix** — provide corrected code
-3. **Apply the fix** — edit the file directly (don't just suggest, actually fix it)
-4. **Note any CLI commands needed** — e.g., `pnpm codegen` or `primitive config push`
-
-If no issues are found, briefly confirm the code follows best practices.
-
-## CLI Quick Reference
-
-Remind users of these essential commands when relevant:
-
-```bash
-# Verify current configuration (DO THIS FIRST)
-primitive env list                 # List environments (CURRENT vs committed TEAM DEFAULT)
-primitive env show                 # Details for the currently-resolved env (api URL, app ID)
-primitive whoami                   # Authenticated user + resolved server/app
-
-# Switching environments
-primitive env use <name>           # Select this machine's environment (gitignored local state)
-primitive --env <name> <command>   # One-off override for a single command
-PRIMITIVE_ENV=<name> <command>     # Override via env var (useful in scripts/CI)
-
-# Setup — existing project (most common: adopting Primitive in an existing repo)
-pnpm add -g primitive-admin                             # Install CLI (pnpm preferred; npm works too)
-primitive env add dev --api-url <url> --app-id <id>     # Add env to .primitive/config.json
-primitive env add prod --api-url <url> --app-id <id>    # (creates the file if missing)
-primitive login                                         # Authenticate (tokens stored per-env)
-
-# Setup — brand-new project (greenfield only)
-primitive init my-new-app                               # Scaffolds template, creates a new app
-                                                        # on the server, runs pnpm install.
-primitive init my-new-app --platform web,ios            # One app, a web client AND a native
-                                                        # client: web/ and ios/, with the project
-                                                        # config, git repo and the shared
-                                                        # models/models.toml at the root.
-
-# Setup — adding a client to an app that already exists
-primitive init ios --platform ios                       # Run INSIDE the app's repo: adds the
-                                                        # client to the app the nearest ancestor
-                                                        # .primitive/config.json targets. Writes
-                                                        # no nested .primitive/ or .git/ and makes
-                                                        # no commit — review with `git status`.
-                                                        # Read the multi-client guide first.
-
-# Guides (the most important commands for development)
-primitive guides list              # See all guides: topics, descriptions, available (lang,platform) combinations
-primitive guides get <topic>       # Read a guide's default variant
-primitive guides get <topic> --language swift --platform ios   # Read a specific language/platform variant
-
-# Configuration as Code
-primitive config init --dir ./config  # Initialize config directory
-primitive config pull --dir ./config  # Pull config from server
-primitive config push --dir ./config  # Push config to server
-primitive config diff --dir ./config  # Preview changes before push
-
-# Taking something out of service (or putting it back)
-primitive workflows disable <key>       # same verb pair on every type that has one
-primitive cron-triggers disable <id>
-primitive webhooks disable <id>
-primitive integrations disable <key>
-primitive prompts disable <key>
-primitive users disable <user-id>       # a person, not an object — reversible
-primitive feature-flags disable <key>   # super-admin platform toggle
-
-# Retiring an object (soft delete; NOT the same as disable)
-primitive workflows archive <key>       # same verb on the five types that carry
-primitive cron-triggers archive <id>    # `archived`; confirms first, -y skips
-primitive webhooks archive <id>
-primitive integrations archive <id>     # the ID column of `integrations list`
-primitive prompts archive <id>          # the ID column of `prompts list`
-
-# Common operations
-primitive apps list                # List apps on the active env's server
-primitive apps create "Name"       # Create an app (does NOT auto-bind to an env;
-                                   # edit .primitive/config.json or use `env add` to bind)
-```
-
-**Availability is not configuration.** Whether a workflow, cron trigger,
-webhook, integration or prompt is in service is one server-owned `status`
-field, changed only by `<noun> enable|disable` (or the matching console
-action) and by the delete flow, whose CLI spelling is `<noun> archive` on those
-same five types. It is not a TOML key: `config pull` does not emit it,
-`config push` never sends it, and a file that still carries a `status` line
-fails the push with a message naming the verbs. So a push cannot put something back in service
-that an operator took out of it, and a fresh environment stood up from config
-has everything active. Anything newly created or pushed is active; there is no
-`draft` state on any object.
-
-**`archive` retires, `--prune` destroys.** `<noun> archive <id>` writes the
-third value, `archived`: the delete lifecycle rather than availability. The row
-is kept so its history still resolves, it goes on holding its key — and, for
-webhooks and cron triggers, its slot against the per-app cap — `enable` refuses
-it, and there is no un-archive. Reclaiming the key means a hard delete: remove
-the object's TOML file and run a confirmed `primitive config push --prune`, then
-re-add the file and push. There is no `--hard` flag and no per-type `delete`
-verb; prune-by-push is the CLI's only hard delete. `users` and `admins` carry
-`enable`/`disable` but no `archive` — people are not configuration objects.
-
-Per-VERSION status is a different thing and stays in TOML: a prompt, workflow
-or script config retires a named version with `status = "archived"` inside its
-`[[configs]]` entry, which says which version is live, not whether the object
-is serving.
-
-## Debugging and inspection
-
-The CLI is the reference surface for inspecting a running app — reading what
-happened without opening the admin UI. The inspection commands share one set of
-conventions so they behave predictably across resources.
-
-```bash
-# Workflow runs (the reference tailing command)
-primitive workflows runs list <workflow-id>            # recent runs
-primitive workflows runs list <workflow-id> --json     # normalized inspection items
-primitive workflows runs list <workflow-id> --watch    # re-render the list every 2s (snapshot)
-primitive workflows runs list <workflow-id> --follow   # append runs as they start or change (tail)
-primitive workflows runs list --user-id <user-id>      # one user's runs, across every workflow
-primitive workflows runs steps <workflow-id> <run-id>  # every step run of one run
-primitive workflows runs status <workflow-id> <run-id> # one run's status + step results
-
-# The other log-shaped views
-primitive integrations logs <integration-id>           # outbound calls: status, timing, actor
-primitive webhooks events <webhook-id>                 # inbound deliveries and how they were handled
-primitive analytics events                             # app activity events
-
-# Per-subject analytics — one home, the analytics noun
-primitive analytics workflows --window-days 7          # top workflows by runs
-primitive analytics prompts --window-days 7            # top prompts by executions
-primitive analytics integrations                       # calls, error rate, latency
-
-# Blob storage
-primitive blob-buckets list                            # buckets in the app (app-scoped: no selector)
-primitive blob-buckets head <bucket> <key>             # object metadata without downloading
-
-# Live connections and sessions
-primitive connections list --user-id <id>              # active WebSocket connections
-primitive sessions list --user-id <id>                 # auth sessions
-
-# Database records and app documents
-primitive databases records query <database> ...       # read records
-primitive databases records get <database> <model-name> <record-id>
-primitive documents records query <document> <model-name> [--filter '{...}']
-primitive documents records get <document> <model-name> <record-id>
-primitive documents dump <document-id>                 # every model's records as JSON
-primitive documents export <document-id>               # dump a document's contents
-primitive documents create "<title>" [--owner <user-id-or-email>]  # mint a document (--owner needs a super-admin or assigned-console-admin token; app-role admins create as themselves)
-primitive documents delete <document-id> [-y] [--json]  # delete a document (document owner / app owner / super-admin or assigned-console-admin; app-role admins only via a containing collection's document.delete rule)
-
-# Metadata
-primitive metadata get <type> <id> <category>          # resource metadata VALUES
-primitive metadata-category-configs list               # category DEFINITIONS (schema + read/write rules)
-primitive metadata-category-configs get <type> <category>
-```
-
-**Uniform flags across every inspection command:**
-
-- `--app <id>` — target app (falls back to the resolved env's app).
-- `--json` — the output you parse in scripts. Most commands print the endpoint
-  payload as-is; the log views below normalize theirs into the shared item
-  shape. Either way it is a JSON document, never a bare array — except the
-  type-config readers (`group-type-configs`, `collection-type-configs`,
-  `metadata-category-configs`), whose `list --json` prints the configs as a
-  bare array (`jq '.[]'`). Data goes to
-  stdout; status, warnings and the `CLI Version: …` banner go to stderr — so
-  even the always-JSON commands that take no `--json` flag pipe cleanly
-  (`primitive documents dump <doc> | jq .`).
-- `--limit <n>` / `--cursor <c>` — paged reads. The response envelope is always
-  `{ items, hasMore, nextCursor? }`. Both `records query` verbs print that
-  envelope whatever shape their endpoint returns, and neither emits the
-  deprecated `cursor` alias — read `nextCursor`. Aggregate reads walk the
-  `nextCursor` chain.
-- `list` always requires a **selector** (`--user-id`, `--owner`, a resource id, …)
-  so it never enumerates the whole app — **except** genuinely app-scoped
-  resources like `blob-buckets list`, which lists the app's buckets directly.
-  `--user-id` is the spelling on every list/inspection selector; `connections
-  list`, `sessions list` and `tokens list` still accept `--user` as a
-  deprecated alias that prints a notice on stderr.
-
-**One `--json` item shape across the log views.** `workflows runs list`,
-`workflows runs steps`, `integrations logs`, `webhooks events` and `analytics
-events` all emit the same item envelope inside their endpoint's pagination
-envelope — never a bare array:
-
-```json
-{
-  "items": [
-    {
-      "source": "workflow-run",
-      "timestamp": "2026-07-24T18:03:11.204Z",
-      "outcome": "error",
-      "nativeStatus": "failed",
-      "correlation": { "runId": "01J…", "workflowId": "01J…", "userId": "01J…" },
-      "detail": { "workflowKey": "summarize", "errorMessage": "…" }
-    }
-  ],
-  "hasMore": false
-}
-```
-
-- `source` is the discriminator: `workflow-run`, `workflow-step`,
-  `integration`, `webhook`, `activity`.
-- `outcome` is the normalized verdict — `ok`, `error`, `pending`, or `neutral`
-  — and `nativeStatus` keeps the source's own value (an HTTP integer, `failed`,
-  `duplicate`, …) verbatim, so filtering on the raw value stays possible. A
-  webhook that was accepted but matched no active workflow is `ok` with
-  `nativeStatus: "workflow_inactive"` — a non-dispatch, not a failure.
-- `correlation` carries the pivot keys that let you follow one operation
-  between views (`runId`, `stepId`, `traceId`, `workflowId`, `webhookId`,
-  `userId`) plus the row's own id (`stepRunId`, `eventId`), so a row you
-  printed can always be looked up again.
-- `detail` is a per-source allowlist of operator-facing fields, not the whole
-  stored record.
-- Pagination rides alongside `items`: `hasMore` plus `nextCursor` where the
-  endpoint pages by cursor, `page`/`pageSize`/`totalRows` for `analytics
-  events`. `integrations logs` returns `{ items }` — it filters within a
-  bounded scan rather than paging.
-- The normalization is `--json`-only: the human tables stay per-view because
-  each shows columns the shared shape has no room for (queue delay, inter-step
-  gap, token counts, event id). `--watch --json` reprints the same envelope
-  each tick; `--follow --json` emits one item per line (newline-delimited
-  JSON), since a tail has no closing bracket to wait for.
-
-**Per-user inspection.** Two views can be keyed on a user:
-
-```bash
-primitive workflows runs list --user-id <user-id>   # every run that user started
-primitive analytics events --user-id <user-id>      # that user's activity events
-```
-
-`workflows runs list --user-id` makes `<workflow-id>` optional — it lists the
-user's runs across every workflow. Pass both to narrow to one workflow.
-`integrations logs` and `webhooks events` have no `--user-id`: an integration
-invocation records the actor but is indexed by integration, and a webhook event
-carries no user identity at all. To follow a user through those, take the
-`runId`/`traceId` from that user's workflow runs and match it in the
-integration logs.
-
-**`--watch` vs `--follow` (both poll — there is no server push):**
-
-- `--watch` re-fetches the current snapshot each interval and re-renders the whole
-  view (a periodic re-`list`/`get`). It works on any list command with no server
-  change.
-- `--follow` tails: it appends new/changed rows since a server-owned checkpoint,
-  like `tail -f`. It is offered **only** where the endpoint supports the resume
-  contract (today: `workflows runs list`); other commands offer only `--watch`
-  until their endpoint adds it. Passing `--follow` where it isn't supported fails
-  with a clear message.
-- `--interval <seconds>` sets the poll interval (minimum 1s, default 2s).
-- `--watch` and `--follow` are mutually exclusive.
-- `--json --follow` emits **NDJSON** (one JSON object per new row per line) — a
-  tail is an unbounded stream, so it can't be one array; pipe it to `jq -c`.
-  `--json --watch` emits one array per redraw.
-- Ctrl-C stops a tail cleanly (exit 0).
-
-**`--follow` shows the latest observed version of a row, not every state change.**
-It re-emits a run when a newer version is observed between polls, so a run you
-already saw can reappear at its new position after its status changes — that is
-expected, not a duplicate. Fast transitions that happen between two polls collapse
-to the latest stored version. This is near-lossless observed-version tailing:
-rows sharing a timestamp, or a delayed index update, can occasionally be skipped
-or re-shown. Use it to watch activity, not as an exactly-once event log.
-
-## When the User is Starting a New Feature
-
-If the user describes a new feature they want to build:
-
-1. **Verify CLI configuration** per Step 0 — confirm the active environment in
-   `.primitive/config.json` (and its bound `apiUrl` / `appId`) match the project's intended target
-   before running any commands
-2. **Run `primitive guides list`** to discover available topics and their `(language, platform)` combinations
-3. **Identify which guides are relevant** to their feature from the list output
-4. **Fetch those guides** with `primitive guides get <topic> --language <lang> --platform <platform>`
-   (using the project's language/platform; omit the flags if unknown)
-5. **Recommend a data modeling approach** based on the guide content. If requirements are unclear or ambiguous, **ask the user clarifying questions before proceeding** — it's much easier to get the data model right upfront than to migrate later
-6. **Outline the implementation steps** referencing specific patterns from the guides
-7. **Write the code** following the patterns exactly
-8. **Review automatically** per Step 4 above
-
-## When the User Asks "How Do I...?"
-
-For any question about Primitive platform capabilities:
-
-1. **Run `primitive guides list`** to find the relevant topic (and its available language/platform combinations)
-2. **Fetch the guide**: `primitive guides get <topic> --language <lang> --platform <platform>` (omit the flags if the language/platform is unknown)
-3. **Answer from the guide content** — don't guess or make up APIs
-4. **Include working code examples** from the guide
-5. **Point the user to the guide** for further reading: "You can see more examples by running `primitive guides get <topic>`"
+Fetch the `documents` guide and follow its export/import sections. A migration is two
+exports into one directory and two imports out of it, in a fixed order — the documents
+bundle, then the collections those documents sit in — and the guide has the commands, the
+order they must run in, and what does not travel. Don't run a single export or import from
+memory: the wrong order silently loses every collection's document membership.
 
 ## Upgrading Platform Libraries
 
@@ -513,7 +109,7 @@ moved too, and new platform capabilities should be considered. The refreshed gui
 source of truth for what the platform can do now.
 
 The backend is upgraded by the platform team, not by the app — the app only chooses which
-environment it points at (Step 0). A library upgrade against the production environment
+environment it points at (see the `configuration` guide). A library upgrade against the production environment
 needs no server-side changes.
 
 ### 1. Snapshot the current state
@@ -554,12 +150,40 @@ channel from the *installed* `js-bao-wss-client` major, so fetching first return
 for the old version. Then refetch the guides for every feature area the app uses,
 passing `--refresh` on the first call.
 
-### 4. Fix breaking changes
+### 4. Fix breaking changes, then scan for deprecated API use
 
 Run the app's typecheck/build. For every error, consult the refreshed guide for that
 feature area and migrate the code to the current API — don't pin back or suppress. A
 major version bump means breaking changes are expected; treat the migration as part of
 the upgrade, not an optional follow-up.
+
+Once it builds, find every platform API the app still uses that the platform has
+deprecated. A deprecated surface works today and is removed in a later major, so this
+is the moment to warn the user, not the moment it breaks. Each surface marks its
+deprecations where the toolchain already looks, so the scan is a lint or a build, not
+a grep:
+
+- **TypeScript (web) apps.** Every deprecated member of the platform packages carries
+  a `@deprecated` note in its typings, and the `@typescript-eslint/no-deprecated` lint
+  rule reports each use together with that note. The Vue starter template enables it
+  for `src/`, so `pnpm lint` in an app on the current template lists them. An app
+  whose lint config predates the rule reports nothing: pull the template's
+  `eslint.config.ts` forward first (Step 6 covers the rest of the template; take that
+  one file now), then lint.
+- **Swift apps.** The client marks deprecations with `@available(*, deprecated,
+  message:)`, so the compiler reports each use as a warning that names the
+  replacement. Build the app and read the `is deprecated` warnings for the app's own
+  sources, not its dependencies.
+- **The configuration tree.** A deprecated key or spelling in the app's `primitive/`
+  TOML is reported when the tree is pushed; the `configuration` guide explains how to
+  check a tree without applying it.
+
+Report every hit to the user as a list: file and line, the deprecated API, and the
+replacement its note names (the `changelog` guide has the entry that deprecated it
+and what replaced it). Don't migrate them unasked — some replacements change
+behavior — but say which ones are a mechanical rename and offer to do those in the
+same upgrade. A use the app keeps on purpose gets a lint suppression with the reason
+beside it, so the next upgrade's scan does not report it again.
 
 ### 5. Retire resolved workarounds
 
@@ -617,16 +241,18 @@ guides for the app's feature areas. Compare against what the app actually does:
 
 ### 8. Verify and stamp
 
-Run the app's tests, apply the Step 4 post-code review to everything modified, and
+Run the app's tests, apply the post-change review above to everything modified, and
 update the feedback doc's upgrade stamp (date, channel, versions, and the template
 commit synced in Step 6).
 
 ### The platform feedback doc
 
 Convention: a `PRIMITIVE-FEEDBACK.md` at the app root tracks the app's relationship to the
-platform — when it was last upgraded, and which workarounds exist for platform issues.
-This is what makes upgrades mechanical instead of archaeological. If the app doesn't
-have one, create it during the first upgrade:
+platform — when it was last upgraded, which workarounds exist for platform problems, and
+what the app found missing or broken. This is what makes upgrades mechanical instead of
+archaeological, and it is also how platform feedback reaches the platform team: **the
+platform team reads this document. No issue is filed from an app.** If the app doesn't
+have one, create it the first time there is something to record:
 
 ```markdown
 # Platform Feedback
@@ -638,171 +264,26 @@ have one, create it during the first upgrade:
 - Template: primitive-vue-template @ main 0f1c2d3
 
 ## Open items
-- [#1234] Symptom or missing capability. Workaround: `src/lib/foo.ts:42` (retry loop).
+- Symptom or missing capability. Evidence: `POST /app/x/api/databases` returns 500
+  (error text below). Workaround: `src/lib/foo.ts:42` (retry loop). Remove when: the
+  create returns 201 on the first call.
 
 ## Resolved
-- [#1101] Symptom. Workaround removed 2026-07-21.
+- Symptom. Workaround removed 2026-07-21.
 ```
 
-Issue numbers refer to platform issues where known (Primitive-Labs members); items
-without an issue number are fine — the doc is useful even when the issue tracker isn't
-accessible.
+**When something looks like a platform problem** — a bug in js-bao, the client library,
+the CLI, or a capability the platform doesn't have — rather than a problem in the user's
+app, write it into this document under **Open items**. That is the whole of what to do
+with it; help the user work around the problem in the app, and record:
 
-## Filing Platform Issues
+- **The symptom**: one line, what goes wrong or what is missing.
+- **The evidence**: the exact call, config, or command and the verbatim error or
+  response, in a fenced block if it is more than a line. Precision here is what lets the
+  platform team reproduce it.
+- **The workaround location**: `file:line` of the code the app carries because of it.
+- **The condition for removing the workaround**: the observable platform behavior that
+  means the workaround can come out. A later upgrade re-tests exactly this (Step 5).
 
-Sometimes the problem is in the platform itself — a bug in js-bao, the client library,
-the CLI, or a capability the platform doesn't have — rather than in the user's app.
-Platform work is tracked as GitHub issues on `Primitive-Labs/js-bao-wss`.
-
-**Gate: only suggest filing an issue if the signed-in GitHub user is a member of the
-Primitive-Labs org.** Check silently before ever raising the option:
-
-```bash
-gh api user/memberships/orgs/Primitive-Labs --jq .state 2>/dev/null
-```
-
-If this doesn't print `active` (not a member, or `gh` is missing or unauthenticated),
-don't mention filing an issue at all — help the user work around the problem instead.
-
-### Tracker hygiene (issues and comments alike)
-
-Everything you write to the tracker — new issues and follow-up comments on existing
-ones — is read by an agent pipeline and by maintainers who have none of your session's
-context. What you write is all they get, and investigating is the assignee's job —
-yours is to state the problem clearly.
-
-- **Brevity and clarity win over verbosity.** Keep the prose to 1000 characters or
-  less. Fenced code blocks (repro commands, config, verbatim error output) don't count
-  toward the cap — precision there is what makes an issue reproducible. If the prose
-  doesn't fit, you're including solution detail or context the assignee can rediscover.
-- **Self-contained.** Assume the reader knows nothing about the user's app and has no
-  internal knowledge of the platform. Reference related issues by number, but inline
-  whatever context is needed to read the issue standalone.
-- **Describe the problem, not the solution.** Don't prescribe the fix or assume a
-  particular implementation.
-- **Don't relitigate decisions rejected in earlier issues** — carry forward the
-  discovered tradeoffs, stated neutrally.
-
-### Bugs (an existing platform feature not working as designed)
-
-Body template — fill each section with as much precision as possible, so the issue is
-easy to reproduce on the first try:
-
-```
-## Repro steps
-<numbered, precise, minimal: exact API calls, config, versions. The test:
-someone with no context reproduces it on the first try>
-
-## Observed behavior
-<what actually happens, with verbatim error text / response bodies in fenced
-blocks>
-
-## Expected behavior
-<what should happen instead, stated as an observable outcome — this is what
-"fixed" means, and what a fix will be tested against>
-
-## Design review needed?
-<tick any that apply; leave all unticked if the fix looks self-contained>
-
-- [ ] Involves a critical security decision (auth, permissions, CEL, secrets, webhook
-      verification, DO routing)
-- [ ] Risks a performance regression on a per-request, per-message or per-connection path
-- [ ] Requires a data model or index change (`models.yaml`)
-- [ ] Breaks an existing API contract (removes or retypes something in `openapi.json`, or
-      changes a `src/client` public signature non-additively)
-```
-
-Write "Expected behavior" as the acceptance criterion: the observable outcome that
-defines the bug as fixed. If prior investigation exists (an earlier thread, a
-session's debugging), link it — don't inline a root-cause theory as fact.
-
-The "Design review needed?" checkboxes decide the bug's route: any tick sends it
-through the design gate; all unticked sends it straight to implementation, with
-"Expected behavior" as the acceptance criteria. When unsure, leave a box unticked —
-the worker re-checks against its own diff and routes itself back if one applies.
-
-Labels: `type:bug` only.
-
-### Features / enhancements / platform extensions
-
-```
-## Problem
-<the application-level problem being solved, and who hits it — a concrete
-scenario, not an abstraction, and not a solution>
-
-## What I tried
-<existing platform features attempted, and why each falls short — omit if none apply>
-
-## What a solution needs to enable
-<the outcomes a solution must make possible, as bullets — capabilities from
-the consumer's perspective, not designs>
-```
-
-Keep "What a solution needs to enable" outcome-shaped: "an app can resume a follow
-from the last event it saw across restarts" — not "add a `resumeAfter` token to the
-list endpoint". If you have a design idea worth preserving, put it in a comment,
-clearly labeled as an idea — never in the body.
-
-Labels: `type:feature` only.
-
-### Filing
-
-Use only `type:bug` or `type:feature` (e.g. file performance problems as `type:bug`
-with measurements in the repro steps). Search open issues for duplicates first:
-
-```bash
-gh issue list --repo Primitive-Labs/js-bao-wss --search "<keywords>" --state open \
-  --json number,title
-```
-
-Then create the issue with exactly one `type:*` label and nothing else — **no
-assignee** (triage assigns sponsors; unassigned is the correct starting state), no
-priority labels, no `state:*` label, and no `dispatch-v3` (state and dispatch labels
-are added together by triage once it judges the filing complete — never by the
-filer; an issue waiting for triage is the correct starting state):
-
-```bash
-gh issue create --repo Primitive-Labs/js-bao-wss \
-  --title "<one-line symptom or need>" \
-  --label "type:bug" \
-  --body "<template body>"
-```
-
-The templates above mirror the canonical ones in the js-bao-wss repo at
-`.claude/skills/_shared/templates/` (`bug-filing.md`, `feature-filing.md`,
-`docs-filing.md`), which the pipeline validates against with
-`.claude/skills/_shared/check-filing.sh` before an issue can be picked up — a body
-missing a required section stalls in triage until a human repairs it. If the
-templates here and the repo's ever disagree, the repo's win. When working inside a
-js-bao-wss checkout, don't file by hand at all: use that repo's `/file-issue` skill,
-which interviews for the sections, validates the draft offline, and files with the
-right labels.
-
-### Follow-up comments on existing issues
-
-When the duplicate search finds an issue that already covers the problem, comment
-there instead of filing. A comment is a **delta on the thread, not a fresh report** —
-the hygiene rules above (1000-character prose cap, fenced blocks exempt, problem not
-solution, self-contained) apply to it unchanged, plus:
-
-- **Lead with what's new**: a repro, a counterexample, a version/deployment where the
-  behavior changed, a confirmation that it no longer reproduces. Don't restate what
-  the thread already establishes — reference it.
-- **Evidence goes in fenced blocks**, exactly as in an issue body: numbered repro
-  steps, exact commands and API calls, verbatim errors, versions and app/resource
-  ids. Prose interprets the evidence; it must not be the container for it.
-- **One comment, one issue's scope.** Evidence that implicates a *different* issue
-  belongs in a separate comment on that issue, cross-referenced by number — not
-  folded into this one.
-- **State facts; leave triage to the maintainers.** Stage, priority, closure, and
-  duplicate-of verdicts are theirs. If the evidence points at a next step (re-test
-  after X lands, likely duplicate of #N), one closing sentence may say so — never
-  more.
-
-### Record the issue in the app
-
-After filing, add an entry to the app's `PRIMITIVE-FEEDBACK.md` (see "The platform feedback doc"
-above) under **Open items**: the issue number, a one-line symptom, and — if you built a
-workaround in the app — where it lives (`file:line`). This is what lets a future upgrade
-find and remove the workaround once the platform fix ships. If a workaround is added
-later for an already-filed issue, update the entry then.
+Entries sometimes carry a platform issue number (Primitive-Labs members add them); items
+without one are just as useful — the document is the feedback channel, not the tracker.

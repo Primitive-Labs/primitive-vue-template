@@ -18,7 +18,9 @@ const exampleTests: TestGroup = {
     {
       id: "example-basic-assertions",
       name: "Basic Assertions Test",
-      run: async (log) => {
+      // Nothing here awaits, so `run` is not async; it still returns the
+      // Promise<string> the harness expects.
+      run: (log) => {
         log("Testing basic assertions...");
 
         const sum = 2 + 2;
@@ -33,7 +35,7 @@ const exampleTests: TestGroup = {
         }
         log("String toUpperCase works ✓");
 
-        return "All basic assertions passed";
+        return Promise.resolve("All basic assertions passed");
       },
     },
   ],

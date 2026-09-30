@@ -11,8 +11,7 @@ The Primitive CLI (`primitive-admin`) is required for app setup, OAuth/origin co
 ```bash
 pnpm add -g primitive-admin   # or: npm install -g primitive-admin
 primitive login
-primitive use "<Your App Name>"
-primitive whoami    # confirm app + server endpoint
+primitive whoami    # confirm app + server endpoint (the app this project's environment names)
 ```
 
 For platform documentation, query the CLI directly rather than searching elsewhere:
@@ -122,7 +121,7 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm preview` | Serve the production build locally |
 | `pnpm codegen` | Regenerate `*.generated.ts` from `models.toml` |
 | `pnpm type-check` | `vue-tsc --build` |
-| `pnpm lint` | ESLint with `--fix --cache` |
+| `pnpm lint` | ESLint with `--fix --cache`, using the type-aware `recommendedTypeChecked` preset (unhandled promises, `async` without `await`, redundant assertions); findings are fixed in source, not suppressed. Also warns on every use of a deprecated platform API |
 | `pnpm format` / `pnpm format:check` | Prettier write / check |
 | `pnpm cf-deploy --deploy-env <name> --primitive-env <name>` | Build and deploy to Cloudflare Workers (see below) |
 | `pnpm clean` / `pnpm clean-modules` | Remove `dist/` / `node_modules` + lockfile |
@@ -351,7 +350,9 @@ environment rather than from any `.env` file.
 ### 1. Prerequisites
 
 - Cloudflare account with Workers access
-- `wrangler` is installed as a dev dependency (no separate install needed)
+- `wrangler` is installed as a dev dependency (no separate install needed).
+  The deploy runs that pinned copy through `pnpm exec`, so no
+  `pnpm approve-builds` step is needed either.
 
 ### 2. Set the worker name in `wrangler.toml`
 

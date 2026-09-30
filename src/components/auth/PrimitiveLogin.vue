@@ -262,10 +262,12 @@ const showOpenMailButton = computed(() => isIOS());
 
 // Methods
 function navigate(url?: string, routeName?: string): void {
+  // Navigation is fire-and-forget: a blocked route resolves to a navigation
+  // failure, and a guard that throws should surface as an unhandled rejection.
   if (routeName) {
-    router.push({ name: routeName });
+    void router.push({ name: routeName });
   } else if (url) {
-    router.push(url);
+    void router.push(url);
   }
 }
 
@@ -288,7 +290,7 @@ function proceedAfterAuth(
     if (promptAddPasskey) query.promptAddPasskey = "1";
 
     if (props.onboardingRoute) {
-      router.push({ name: props.onboardingRoute, query });
+      void router.push({ name: props.onboardingRoute, query });
       return;
     }
 
@@ -297,12 +299,12 @@ function proceedAfterAuth(
       for (const [k, v] of Object.entries(query)) {
         url.searchParams.set(k, v);
       }
-      router.push(url.pathname + url.search + url.hash);
+      void router.push(url.pathname + url.search + url.hash);
       return;
     }
   }
 
-  router.push(continueUrl.value);
+  void router.push(continueUrl.value);
 }
 
 function resetToInitial(): void {
@@ -312,8 +314,9 @@ function resetToInitial(): void {
   sentEmail.value = "";
   otpCode.value = "";
   clearResendTimer();
-  // Restart passkey conditional UI if available
-  startPasskeyConditionalUI();
+  // Restart passkey conditional UI if available. It catches every error it
+  // can raise (see its try block), so its promise is not awaited here.
+  void startPasskeyConditionalUI();
 }
 
 function clearResendTimer(): void {
@@ -507,17 +510,17 @@ async function startPasskeyConditionalUI(): Promise<void> {
     return;
   }
 
-  const supportsAutofill = await browserSupportsWebAuthnAutofill();
-  supportsPasskeyAutofill.value = supportsAutofill;
-
-  if (!supportsAutofill) {
-    logger.debug("Browser does not support WebAuthn autofill");
-    return;
-  }
-
-  logger.debug("Starting passkey conditional UI");
-
   try {
+    const supportsAutofill = await browserSupportsWebAuthnAutofill();
+    supportsPasskeyAutofill.value = supportsAutofill;
+
+    if (!supportsAutofill) {
+      logger.debug("Browser does not support WebAuthn autofill");
+      return;
+    }
+
+    logger.debug("Starting passkey conditional UI");
+
     // Get authentication options from server
     const { options, challengeToken } = await user.startPasskeyAuth();
 
@@ -586,7 +589,7 @@ onMounted(() => {
 
   // Start passkey conditional UI after auth config is loaded
   if (authConfig.value?.hasPasskey) {
-    startPasskeyConditionalUI();
+    void startPasskeyConditionalUI();
   }
 });
 
@@ -595,7 +598,7 @@ watch(
   () => authConfig.value?.hasPasskey,
   (hasPasskey) => {
     if (hasPasskey && loginState.value === "initial") {
-      startPasskeyConditionalUI();
+      void startPasskeyConditionalUI();
     }
   }
 );

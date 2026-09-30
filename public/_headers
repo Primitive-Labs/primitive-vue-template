@@ -7,9 +7,10 @@
 
 # Apple fetches this document at exactly this path, with no extension, and
 # rejects anything that is not JSON — an extensionless asset is served as
-# text/plain otherwise. Only matters once the app has renamed
-# .well-known/apple-app-site-association.example to the real name; until then
-# the path is not an asset at all and the SPA fallback answers it, which is why
-# the applinks entitlement goes last (see .well-known/README.md).
+# text/plain otherwise. scripts/deploy.mjs writes the document before each
+# build, from the deployed environment's iosAppId; an environment without one
+# serves no document at all, and until one is deployed the path is not an asset
+# and the SPA fallback answers it — which is why the applinks entitlement goes
+# last (see .well-known/README.md).
 /.well-known/apple-app-site-association
   Content-Type: application/json

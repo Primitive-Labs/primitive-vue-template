@@ -27,7 +27,9 @@ const documentLifecycleTests: TestGroup = {
     {
       id: "lifecycle-standalone-no-document",
       name: "Stand-alone: runs without any document",
-      run: async (log) => {
+      // Nothing here awaits, so `run` is not async; it still returns the
+      // Promise<string> the harness expects.
+      run: (log) => {
         log("Running a test that needs no document...");
 
         const doubled = [1, 2, 3].map((n) => n * 2);
@@ -36,7 +38,7 @@ const documentLifecycleTests: TestGroup = {
         }
         log("Computed [2, 4, 6] without touching any document ✓");
 
-        return "Stand-alone test passed (no document used)";
+        return Promise.resolve("Stand-alone test passed (no document used)");
       },
     },
 

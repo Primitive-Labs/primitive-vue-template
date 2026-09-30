@@ -170,7 +170,28 @@ export function useJsBaoDataLoader<
   // True once the skeleton-delay timer fires while a load is in flight. Only
   // relevant after the document is ready; see `showSkeleton` below.
   const skeletonDelayElapsed = ref(false);
-  const subscriptionsEnabled = ref(false);
+  // #3023 — the load that started last is the one whose result lands. The
+  // subscriptions below are deliberately live from the start, so two loads can
+  // be in flight at once: a change that arrives while the first load is still
+  // reading schedules a second one, and without this counter the slower first
+  // load could finish last and put its stale (usually empty) result back.
+  let loadGeneration = 0;
+  // The generation the next scheduled load will claim, taken the moment that
+  // load is SCHEDULED rather than when it starts. The reload a change asks for
+  // waits out the debounce first, and a first load that resolves inside that
+  // window would otherwise still count as current: it would publish the empty
+  // result the reload exists to replace, and set `initialDataLoaded` — which
+  // is what a one-shot consumer (an "is this document empty?" bootstrap) reads.
+  let scheduledGeneration: number | null = null;
+
+  /**
+   * Retire whatever is in flight: a newer load has been decided on, so no
+   * result from before it may land. Idempotent — a burst of changes that the
+   * debounce coalesces into one reload reserves one generation.
+   */
+  const supersedeInFlightLoads = () => {
+    if (scheduledGeneration === null) scheduledGeneration = ++loadGeneration;
+  };
 
   let skeletonTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -208,9 +229,7 @@ export function useJsBaoDataLoader<
   });
   const isPaused = computed(() => toBoolean(pauseUpdates, false));
 
-  const queryValue = computed<Q | null>(
-    () => (unref(queryParams) ?? null) as Q | null
-  );
+  const queryValue = computed<Q | null>(() => unref(queryParams) ?? null);
 
   const querySignature = computed(() => {
     const value = queryValue.value;
@@ -238,13 +257,18 @@ export function useJsBaoDataLoader<
       queryParams: toRaw(queryValue.value),
     });
     if (!initialDataLoaded.value) armSkeletonTimer();
+    const generation = scheduledGeneration ?? ++loadGeneration;
+    scheduledGeneration = null;
     try {
       const result = await loadData(queryValue.value);
-      data.value = result as Data;
-      if (!initialDataLoaded.value) {
-        initialDataLoaded.value = true;
-        subscriptionsEnabled.value = true;
+      if (generation !== loadGeneration) {
+        logger.debug("loadData result dropped: a newer load started", {
+          reason,
+        });
+        return;
       }
+      data.value = result;
+      initialDataLoaded.value = true;
       disarmSkeletonTimer();
       logger.debug("loadData success", {
         reason,
@@ -252,6 +276,17 @@ export function useJsBaoDataLoader<
         data: result,
       });
     } catch (error) {
+      if (generation !== loadGeneration) {
+        // #3023 — a newer load overtook this one, and its result is what the
+        // view shows. A failure this late is a failure of a request nobody is
+        // waiting for any more: reporting it would put the caller into an
+        // error state over data that did load.
+        logger.debug("loadData error dropped: a newer load started", {
+          reason,
+          error,
+        });
+        return;
+      }
       if (onError) {
         try {
           onError(error);
@@ -267,10 +302,17 @@ export function useJsBaoDataLoader<
     }
   };
 
-  const scheduleReload = debounce((reason: string) => {
+  const runScheduledLoad = debounce((reason: string) => {
     logger.debug("Reload scheduled", { reason });
     void performLoad(reason);
   }, debounceMs);
+
+  const scheduleReload = (reason: string) => {
+    // Synchronously, ahead of the debounce: from here on the load in flight is
+    // stale, whether or not the reload has started (#3023).
+    supersedeInFlightLoads();
+    runScheduledLoad(reason);
+  };
 
   const reload = () => {
     scheduleReload("Manual");
@@ -283,7 +325,10 @@ export function useJsBaoDataLoader<
     for (const model of subscribeTo) {
       try {
         const unsubscribe = model.subscribe(() => {
-          if (!subscriptionsEnabled.value) return;
+          // #3023 — deliberately NOT gated on the first load having finished.
+          // The initial sync of a document opened with an empty local replica
+          // lands while that load is still reading, so a gate here left the
+          // view on the empty result with nothing left to move it.
           if (!isReady.value) return;
           if (isPaused.value) return;
           scheduleReload("Subscribed models changed");
@@ -300,14 +345,12 @@ export function useJsBaoDataLoader<
         const client = await jsBaoClientService.getClientAsync();
 
         const handleDocumentLoaded = () => {
-          if (!subscriptionsEnabled.value) return;
           if (!isReady.value) return;
           if (isPaused.value) return;
           scheduleReload("Document loaded");
         };
 
         const handleDocumentClosed = () => {
-          if (!subscriptionsEnabled.value) return;
           if (!isReady.value) return;
           if (isPaused.value) return;
           scheduleReload("Document closed");
@@ -345,7 +388,6 @@ export function useJsBaoDataLoader<
       if (!ready) {
         logger.debug("documentReady became false; resetting state");
         initialDataLoaded.value = false;
-        subscriptionsEnabled.value = false;
         disarmSkeletonTimer();
         return;
       }

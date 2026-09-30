@@ -31,7 +31,9 @@ async function bootstrap() {
   app.mount("#app");
 }
 
-bootstrap();
+// Top-level entry: nothing can await it. A failed bootstrap is left to surface
+// as an unhandled rejection so a broken start fails loudly.
+void bootstrap();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

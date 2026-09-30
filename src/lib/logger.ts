@@ -109,7 +109,7 @@ export function createLogger(options?: LoggerOptions): Logger {
     level: options?.level ?? getLogLevel(),
   };
   const scope = Array.isArray(options?.scope)
-    ? options!.scope.map((s) => String(s))
+    ? options.scope.map((s) => String(s))
     : options?.scope
       ? [String(options.scope)]
       : [];

@@ -22,7 +22,7 @@ export default defineConfigWithVueTs(
   globalIgnores(["**/dist/**", "**/dist-ssr/**", "**/coverage/**"]),
 
   pluginVue.configs["flat/essential"],
-  vueTsConfigs.recommended,
+  vueTsConfigs.recommendedTypeChecked,
   skipFormatting,
 
   // Generated model attribute files use the standard js-bao
@@ -39,15 +39,27 @@ export default defineConfigWithVueTs(
   },
 
   // shadcn-vue base components are vendored verbatim under src/components/ui
-  // with intentionally single-word names (Button, Card, …). Renaming them
-  // would diverge from upstream, so exempt them from the multi-word rule.
+  // and are not edited here. Their names are intentionally single-word
+  // (Button, Card, …); renaming them would diverge from upstream. Some import
+  // a props type from a sibling `.vue` file, which the type-aware linter
+  // resolves through the `*.vue` module shim as `any` (vue-tsc resolves it
+  // fine), so the redundant-constituent rule reports a false positive there.
   {
     name: "primitive-vue-template/shadcn-ui-components",
     files: ["src/components/ui/**/*.vue"],
     rules: {
       "vue/multi-word-component-names": "off",
+      "@typescript-eslint/no-redundant-type-constituents": "off",
     },
+  },
+  // Platform deprecations. Every deprecated member of js-bao-wss-client,
+  // primitive-app and js-bao carries a `@deprecated` note in its typings, and
+  // this type-aware rule reports each use with that note, so `pnpm lint` lists
+  // what the next major of the platform removes. Replace the use with what the
+  // note names rather than suppressing the warning.
+  {
+    name: "primitive-vue-template/platform-deprecations",
+    files: ["src/**/*.{ts,mts,tsx,vue}"],
+    rules: { "@typescript-eslint/no-deprecated": "warn" },
   }
 );
-
-

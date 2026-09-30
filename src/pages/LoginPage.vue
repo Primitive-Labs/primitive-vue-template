@@ -95,13 +95,13 @@ interface CarouselItemData {
 
 const carouselItems: CarouselItemData[] = [
   {
-    icon: PieChart as unknown as Component,
+    icon: PieChart,
     title: "Feature 1",
     description: "Lorum ipsum dolor sit amet, consectetur adipiscing elit.",
     content: Feature1Content,
   },
   {
-    icon: TrendingDown as unknown as Component,
+    icon: TrendingDown,
     title: "Feature 2",
     description: "Lorum ipsum dolor sit amet, consectetur adipiscing elit.",
     content: Feature2Content,

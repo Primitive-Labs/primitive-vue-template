@@ -187,9 +187,8 @@ async function handleAddPasskey(): Promise<void> {
     managementState.value = "add-success";
 
     // Reload passkeys after brief success message
-    setTimeout(async () => {
-      await loadPasskeys();
-    }, 1500);
+    // loadPasskeys catches its own errors and shows them in the dialog.
+    setTimeout(() => void loadPasskeys(), 1500);
   } catch (err: unknown) {
     logger.error("Passkey registration error:", err);
 
@@ -294,7 +293,7 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
-      loadPasskeys();
+      void loadPasskeys();
     } else {
       // Reset state when closing
       managementState.value = "loading";
