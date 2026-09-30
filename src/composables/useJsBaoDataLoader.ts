@@ -229,9 +229,7 @@ export function useJsBaoDataLoader<
   });
   const isPaused = computed(() => toBoolean(pauseUpdates, false));
 
-  const queryValue = computed<Q | null>(
-    () => (unref(queryParams) ?? null) as Q | null
-  );
+  const queryValue = computed<Q | null>(() => unref(queryParams) ?? null);
 
   const querySignature = computed(() => {
     const value = queryValue.value;
@@ -269,7 +267,7 @@ export function useJsBaoDataLoader<
         });
         return;
       }
-      data.value = result as Data;
+      data.value = result;
       initialDataLoaded.value = true;
       disarmSkeletonTimer();
       logger.debug("loadData success", {

@@ -23,6 +23,7 @@
 - ALWAYS Fail early. Don't mask missing required inputs with inline fallbacks or try to recover from errors caused by improper usage or bad input. Expose the errors directly.
 - ALWAYS use strong typing and invariants over scattered defensive code.
 - ALWAYS run pnpm codegen and pnpm type-check after making changes and fix any errors.
+- ALWAYS run pnpm lint after making changes and fix what it reports in the source. The lint uses the type-aware `recommendedTypeChecked` preset, so it reports unhandled promises, `async` functions that never await and redundant type assertions: `await` a promise, give it a `.catch`, or mark it `void` with a comment saying why fire-and-forget is intended (only when the callee handles every error it can raise). Do not add `eslint-disable` comments; a rule may be relaxed only in `eslint.config.ts`, scoped to a file pattern, with the reason beside it. Lint also warns on every use of a deprecated platform API (js-bao, js-bao-wss-client, primitive-app); replace it with what the `@deprecated` note names. A lint run with `--max-warnings 0` fails on those warnings too.
 - NEVER modify worker.js. This is a library provided file and should not be edited.
 
 ## Using the Primitive Platform

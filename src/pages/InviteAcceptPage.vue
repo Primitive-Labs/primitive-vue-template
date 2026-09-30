@@ -85,11 +85,13 @@ function stripTokenFromUrl(): void {
 }
 
 function continueToApp(): void {
-  router.push(continueHref.value);
+  // Navigation is fire-and-forget: a blocked route resolves to a navigation
+  // failure, and a guard that throws should surface as an unhandled rejection.
+  void router.push(continueHref.value);
 }
 
 function goToLogin(): void {
-  router.push({
+  void router.push({
     path: loginHref.value,
     query: { continueURL: continueHref.value },
   });
@@ -106,7 +108,7 @@ async function signOutAndRetry(): Promise<void> {
     setPendingInviteToken(token);
   }
   await user.logout();
-  router.push({
+  await router.push({
     path: loginHref.value,
     query: { continueURL: continueHref.value },
   });
@@ -131,7 +133,7 @@ async function confirmAccept(): Promise<void> {
     flowLogger.error("Invitation accept failed", err);
     const code =
       err && typeof err === "object" && "code" in err
-        ? String((err as { code: unknown }).code)
+        ? String(err.code)
         : undefined;
 
     // The server answers one code for an invalid, expired or already-redeemed
@@ -147,7 +149,7 @@ async function confirmAccept(): Promise<void> {
   }
 }
 
-async function handle(): Promise<void> {
+function handle(): void {
   const flowLogger = logger.forScope("handle");
   const tokenParam = route.query.inviteToken;
   const rawToken = Array.isArray(tokenParam) ? tokenParam[0] : tokenParam;

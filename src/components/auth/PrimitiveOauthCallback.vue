@@ -210,8 +210,10 @@ function goToOnboarding(opts: {
   };
   if (opts.promptAddPasskey) query.promptAddPasskey = "1";
 
+  // Navigation is fire-and-forget: a blocked route resolves to a navigation
+  // failure, and a guard that throws should surface as an unhandled rejection.
   if (props.onboardingRoute) {
-    router.push({ name: props.onboardingRoute, query });
+    void router.push({ name: props.onboardingRoute, query });
     return;
   }
 
@@ -220,12 +222,12 @@ function goToOnboarding(opts: {
     for (const [k, v] of Object.entries(query)) {
       url.searchParams.set(k, v);
     }
-    router.push(url.pathname + url.search + url.hash);
+    void router.push(url.pathname + url.search + url.hash);
     return;
   }
 
   // No onboarding route configured — continue straight into the app.
-  router.push(opts.continueUrl);
+  void router.push(opts.continueUrl);
 }
 
 function handleError(err: unknown): void {
@@ -307,7 +309,7 @@ async function handleResendLink(): Promise<void> {
 function goToLogin(): void {
   const loginTarget = buildRouteOrUrl(props.loginUrl, props.loginRoute);
   const loginUrl = resolveRouteOrUrl(router, loginTarget);
-  router.push(loginUrl);
+  void router.push(loginUrl);
 }
 
 // Validation helpers
@@ -339,7 +341,8 @@ onMounted(() => {
     validateRouteExists(props.onboardingRoute, "onboardingRoute");
   }
 
-  handleCallback();
+  // handleCallback catches and reports every error itself.
+  void handleCallback();
 });
 </script>
 

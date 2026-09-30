@@ -121,7 +121,7 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm preview` | Serve the production build locally |
 | `pnpm codegen` | Regenerate `*.generated.ts` from `models.toml` |
 | `pnpm type-check` | `vue-tsc --build` |
-| `pnpm lint` | ESLint with `--fix --cache` |
+| `pnpm lint` | ESLint with `--fix --cache`, using the type-aware `recommendedTypeChecked` preset (unhandled promises, `async` without `await`, redundant assertions); findings are fixed in source, not suppressed. Also warns on every use of a deprecated platform API |
 | `pnpm format` / `pnpm format:check` | Prettier write / check |
 | `pnpm cf-deploy --deploy-env <name> --primitive-env <name>` | Build and deploy to Cloudflare Workers (see below) |
 | `pnpm clean` / `pnpm clean-modules` | Remove `dist/` / `node_modules` + lockfile |

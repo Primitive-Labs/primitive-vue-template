@@ -29,9 +29,7 @@ export function buildRouteOrUrl(url?: string, routeName?: string): RouteOrUrl {
     throw new Error("Exactly one of URL or routeName must be provided.");
   }
 
-  return hasRouteName
-    ? { routeName: routeName as string }
-    : { url: url as string };
+  return hasRouteName ? { routeName } : { url: url as string };
 }
 
 /**

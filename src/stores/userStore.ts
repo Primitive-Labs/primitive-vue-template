@@ -123,6 +123,30 @@ type AuthFailedPayload = JsBaoEvents["auth-failed"];
 
 type UserPrefsMap = Record<string, unknown>;
 
+/** What handleOAuthCallback reads from the base64-JSON `state` URL param. */
+interface OAuthCallbackState {
+  continueUrl?: string;
+  email?: string;
+  inviteToken?: string;
+}
+
+/**
+ * Narrow a parsed `state` param to the fields the callback uses. Anything that
+ * is not an object, and any field that is not a string, reads as absent, so a
+ * malformed state falls through to the defaults.
+ */
+function readOAuthCallbackState(parsed: unknown): OAuthCallbackState {
+  if (typeof parsed !== "object" || parsed === null) return {};
+  const fields = parsed as Record<string, unknown>;
+  const text = (key: keyof OAuthCallbackState) =>
+    typeof fields[key] === "string" ? fields[key] : undefined;
+  return {
+    continueUrl: text("continueUrl"),
+    email: text("email"),
+    inviteToken: text("inviteToken"),
+  };
+}
+
 // Module-scoped lifecycle flags and resources
 let initStarted = false;
 let removeStatusListener: (() => void) | null = null;
@@ -341,11 +365,18 @@ export const useUserStore = defineStore("user", () => {
       const authSuccessHandler = async () => {
         initLogger.debug("Event Received: auth-success");
         if (!isAuthenticated.value) {
-          await completeAuthentication();
+          try {
+            await completeAuthentication();
+          } catch (e: unknown) {
+            initLogger.error("Completing authentication failed:", e);
+          }
         }
       };
-      client.on("auth-success", authSuccessHandler);
-      removeAuthSuccess = () => client.off("auth-success", authSuccessHandler);
+      // `on` takes a sync listener; each handler here catches its own
+      // failures, so its promise is discarded on purpose.
+      const onAuthSuccess = () => void authSuccessHandler();
+      client.on("auth-success", onAuthSuccess);
+      removeAuthSuccess = () => client.off("auth-success", onAuthSuccess);
 
       // On auth-failed, update state but let the app handle navigation.
       // Apps should watch isAuthenticated and redirect to login when it
@@ -360,8 +391,10 @@ export const useUserStore = defineStore("user", () => {
         } catch {}
         // remain initialized; app handles redirect via watching isAuthenticated
       };
-      client.on("auth-failed", authFailedHandler);
-      removeAuthFailed = () => client.off("auth-failed", authFailedHandler);
+      const onAuthFailed = (payload: AuthFailedPayload) =>
+        void authFailedHandler(payload);
+      client.on("auth-failed", onAuthFailed);
+      removeAuthFailed = () => client.off("auth-failed", onAuthFailed);
 
       // initialization complete
       isInitialized.value = true;
@@ -378,7 +411,7 @@ export const useUserStore = defineStore("user", () => {
 
   /**
    * Lazily fetch the app's auth configuration (OAuth providers, passkey
-   * support, magic-link / OTP availability, access mode).
+   * support, email sign-in availability, access mode).
    *
    * Called by login-related pages on mount. Other pages may call it if they
    * need auth-config-derived UI (e.g., a "Manage Passkeys" menu item) —
@@ -396,10 +429,6 @@ export const useUserStore = defineStore("user", () => {
       try {
         const client = await jsBaoClientService.getClientAsync();
         const config = await client.getAuthConfig();
-        const configCompat = config as typeof config & {
-          emailSignInEnabled?: boolean;
-          otpEnabled?: boolean;
-        };
         authConfig.value = {
           appId: config.appId,
           name: config.name,
@@ -411,13 +440,7 @@ export const useUserStore = defineStore("user", () => {
           // rendered a Google button that threw on click.
           googleAvailable: googleWebClientAvailable(config),
           hasPasskey: config.hasPasskey,
-          // #2884: one flag. A client running against a server that predates
-          // the unified flow derives it from the pair it replaced.
-          emailSignInEnabled:
-            typeof configCompat.emailSignInEnabled === "boolean"
-              ? configCompat.emailSignInEnabled
-              : (config.magicLinkEnabled ?? true) ||
-                (configCompat.otpEnabled ?? false),
+          emailSignInEnabled: config.emailSignInEnabled,
         };
         cfgLogger.debug("Auth config loaded:", authConfig.value);
       } catch (e: unknown) {
@@ -501,17 +524,17 @@ export const useUserStore = defineStore("user", () => {
 
     if (state) {
       try {
-        const stateObj = JSON.parse(atob(state));
-        if (stateObj?.continueUrl) {
+        const stateObj = readOAuthCallbackState(JSON.parse(atob(state)));
+        if (stateObj.continueUrl) {
           redirectTo = stateObj.continueUrl;
         }
-        if (stateObj?.email) {
+        if (stateObj.email) {
           emailFromState = stateObj.email;
         }
         // The magic link may have been opened in a different tab/browser, in
         // which case sessionStorage is empty. Restore the inviteToken from
         // state so the verify call can thread it through to the server.
-        if (stateObj?.inviteToken && !getPendingInviteToken()) {
+        if (stateObj.inviteToken && !getPendingInviteToken()) {
           sessionStorage.setItem(
             "primitive:pendingInviteToken",
             stateObj.inviteToken
@@ -637,12 +660,7 @@ export const useUserStore = defineStore("user", () => {
     try {
       const client = await jsBaoClientService.getClientAsync();
       const inviteToken = getPendingInviteToken() ?? undefined;
-      // Cast result to include isNewUser which is returned by the API but not yet in public types
-      const result = (await client.magicLinkVerify(token, { inviteToken })) as {
-        user: { userId: string; email: string; name?: string };
-        promptAddPasskey?: boolean;
-        isNewUser?: boolean;
-      };
+      const result = await client.magicLinkVerify(token, { inviteToken });
       if (inviteToken) clearPendingInviteToken();
 
       magicLogger.debug("Magic link verified successfully", {
@@ -794,14 +812,7 @@ export const useUserStore = defineStore("user", () => {
 
     try {
       const client = await jsBaoClientService.getClientAsync();
-      // Cast result to include isNewUser which is returned by the API but not yet in public types
-      const result = (await client.passkeyAuthFinish(
-        credential,
-        challengeToken
-      )) as {
-        user: { userId: string; email: string; name?: string };
-        isNewUser?: boolean;
-      };
+      const result = await client.passkeyAuthFinish(credential, challengeToken);
 
       passkeyLogger.debug("Passkey sign-in successful", {
         userId: result.user.userId,
@@ -1165,7 +1176,7 @@ export const useUserStore = defineStore("user", () => {
       const client = await jsBaoClientService.getClientAsync();
       const result = await client.me.uploadAvatar(
         resizedImage,
-        outputContentType as AvatarContentType
+        outputContentType
       );
       avatarLogger.debug("Avatar uploaded successfully", {
         avatarUrl: result.avatarUrl,
@@ -1366,7 +1377,7 @@ export const useUserStore = defineStore("user", () => {
     prefsInitLogger.debug("Initializing...");
     try {
       const client = await jsBaoClientService.getClientAsync();
-      const rootDocId = await client.getRootDocId();
+      const rootDocId = client.getRootDocId();
       if (!rootDocId) {
         prefsInitLogger.error(
           "Error initializing user preferences: missing root document ID"
@@ -1389,7 +1400,8 @@ export const useUserStore = defineStore("user", () => {
     logger.debug("Setting up preferences subscription...");
     prefsUnsubscribe = UserPref.subscribe(() => {
       logger.debug("UserPref model changed, reloading preferences...");
-      loadUserPrefs();
+      // loadUserPrefs catches and logs its own errors; nothing to await here.
+      void loadUserPrefs();
     });
   };
 

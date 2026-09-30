@@ -52,12 +52,12 @@ onMounted(async () => {
   try {
     await user.logout(target);
     flowLogger.debug("Logout request completed");
-    router.push(target);
+    await router.push(target);
   } catch (e) {
     flowLogger.error("Logout error", e);
     if (target) {
       try {
-        router.push(target);
+        await router.push(target);
       } catch {
         if (typeof window !== "undefined") {
           window.location.href = target;

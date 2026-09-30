@@ -150,12 +150,40 @@ channel from the *installed* `js-bao-wss-client` major, so fetching first return
 for the old version. Then refetch the guides for every feature area the app uses,
 passing `--refresh` on the first call.
 
-### 4. Fix breaking changes
+### 4. Fix breaking changes, then scan for deprecated API use
 
 Run the app's typecheck/build. For every error, consult the refreshed guide for that
 feature area and migrate the code to the current API — don't pin back or suppress. A
 major version bump means breaking changes are expected; treat the migration as part of
 the upgrade, not an optional follow-up.
+
+Once it builds, find every platform API the app still uses that the platform has
+deprecated. A deprecated surface works today and is removed in a later major, so this
+is the moment to warn the user, not the moment it breaks. Each surface marks its
+deprecations where the toolchain already looks, so the scan is a lint or a build, not
+a grep:
+
+- **TypeScript (web) apps.** Every deprecated member of the platform packages carries
+  a `@deprecated` note in its typings, and the `@typescript-eslint/no-deprecated` lint
+  rule reports each use together with that note. The Vue starter template enables it
+  for `src/`, so `pnpm lint` in an app on the current template lists them. An app
+  whose lint config predates the rule reports nothing: pull the template's
+  `eslint.config.ts` forward first (Step 6 covers the rest of the template; take that
+  one file now), then lint.
+- **Swift apps.** The client marks deprecations with `@available(*, deprecated,
+  message:)`, so the compiler reports each use as a warning that names the
+  replacement. Build the app and read the `is deprecated` warnings for the app's own
+  sources, not its dependencies.
+- **The configuration tree.** A deprecated key or spelling in the app's `primitive/`
+  TOML is reported when the tree is pushed; the `configuration` guide explains how to
+  check a tree without applying it.
+
+Report every hit to the user as a list: file and line, the deprecated API, and the
+replacement its note names (the `changelog` guide has the entry that deprecated it
+and what replaced it). Don't migrate them unasked — some replacements change
+behavior — but say which ones are a mechanical rename and offer to do those in the
+same upgrade. A use the app keeps on purpose gets a lint suppression with the reason
+beside it, so the next upgrade's scan does not report it again.
 
 ### 5. Retire resolved workarounds
 

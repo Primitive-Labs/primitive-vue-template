@@ -276,7 +276,9 @@ async function runOnboarding(): Promise<void> {
 
 function finish(): void {
   onboardingState.value = "redirecting";
-  router.push(redirectTo.value);
+  // Navigation is fire-and-forget: a blocked route resolves to a navigation
+  // failure, and a guard that throws should surface as an unhandled rejection.
+  void router.push(redirectTo.value);
 }
 
 async function checkShouldPromptPasskey(
@@ -501,7 +503,8 @@ onMounted(() => {
     validateRouteExists(props.continueRoute, "continueRoute");
   }
 
-  runOnboarding();
+  // runOnboarding catches every error itself and finishes to the continue URL.
+  void runOnboarding();
 });
 </script>
 

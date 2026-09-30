@@ -13,7 +13,9 @@ watch(
   () => userStore.isAuthenticated,
   (isAuth, wasAuth) => {
     if (wasAuth && !isAuth) {
-      router.push({ name: "login" });
+      // A watcher cannot await; a failed redirect surfaces as an unhandled
+      // rejection, which is the loud failure wanted here.
+      void router.push({ name: "login" });
     }
   }
 );

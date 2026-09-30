@@ -76,7 +76,7 @@ export function getJsBaoConfig(): JsBaoClientOptions {
     oauthRedirectUri: config.oauthRedirectUri,
     auth,
     models: allModels,
-  } as JsBaoClientOptions;
+  };
 }
 
 const VALID_LOG_LEVELS: LogLevel[] = ["debug", "info", "warn", "error", "none"];
@@ -101,9 +101,7 @@ export function getLogLevel(): LogLevel {
 // Validate required configuration (dev aid). oauthRedirectUri is intentionally
 // omitted — it always resolves to a value (defaulting to the running origin).
 const requiredVars = ["appId", "apiUrl", "wsUrl"] as const;
-const missingVars = requiredVars.filter(
-  (key) => !config[key as (typeof requiredVars)[number]]
-);
+const missingVars = requiredVars.filter((key) => !config[key]);
 
 if (missingVars.length > 0) {
   console.error("Missing required Primitive configuration:", missingVars);
