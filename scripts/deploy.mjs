@@ -166,7 +166,6 @@ function parseArgs(argv) {
     deployEnv: null,
     primitiveEnv: null,
     check: false,
-    positional: null,
     passthrough: [],
   };
 
@@ -186,8 +185,15 @@ function parseArgs(argv) {
       parsed.primitiveEnv = arg.slice("--primitive-env=".length);
     } else if (arg === "--check" || arg === "--dry-run-plan") {
       parsed.check = true;
-    } else if (!arg.startsWith("-") && parsed.positional === null) {
-      parsed.positional = arg;
+    } else if (!arg.startsWith("-")) {
+      // A bare token was the old single-axis form. Refusing it keeps one
+      // spelling for each axis instead of guessing which one it meant.
+      fail(
+        `Unexpected argument "${arg}": the deploy and Primitive environments are named with flags, not a bare token.`,
+        "Pass --deploy-env <name> --primitive-env <name>.",
+        "",
+        USAGE,
+      );
     } else {
       // Anything else before `--` is an unknown flag. There is deliberately no
       // escape hatch here (notably none for the identity check below), so an
@@ -691,22 +697,6 @@ function runCommand(command, args, extraEnv = {}) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-
-  if (args.positional !== null) {
-    if (args.deployEnv !== null && args.deployEnv !== args.positional) {
-      fail(
-        `Conflicting deploy environments: "${args.positional}" (positional) and "${args.deployEnv}" (--deploy-env).`,
-        "",
-        USAGE,
-      );
-    }
-    console.warn(
-      `[deploy] Deprecated: the bare "${args.positional}" argument now means ` +
-        `--deploy-env ${args.positional}. Pass it explicitly; it used to select the ` +
-        `Primitive environment too, which is now --primitive-env.`,
-    );
-    args.deployEnv = args.positional;
-  }
 
   if (!args.deployEnv || !args.primitiveEnv) {
     const missing = [

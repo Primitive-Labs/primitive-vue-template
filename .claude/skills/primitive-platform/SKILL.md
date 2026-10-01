@@ -178,6 +178,12 @@ a grep:
   TOML is reported when the tree is pushed; the `configuration` guide explains how to
   check a tree without applying it.
 
+A surface an earlier scan reported as deprecated may since have been removed, and a
+removed surface is not a lint warning but a build error, a refused request or a
+refused push; the `changelog` guide's **Breaking** entries name each removal and its
+replacement (collection `contextId`, for one, is now a resource metadata category
+stamped with `initialMetadata` and read in rules as `md.self.<category>.<key>`).
+
 Report every hit to the user as a list: file and line, the deprecated API, and the
 replacement its note names (the `changelog` guide has the entry that deprecated it
 and what replaced it). Don't migrate them unasked — some replacements change
