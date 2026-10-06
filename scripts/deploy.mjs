@@ -3,7 +3,7 @@
  * Build and deploy this app to Cloudflare Workers.
  *
  * Usage:
- *   pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--check] [-- wrangler args...]
+ *   pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--preview-alias <alias>] [--check] [-- wrangler args...]
  *
  * TWO INDEPENDENT AXES, neither of which defaults:
  *
@@ -13,7 +13,9 @@
  *
  *   --primitive-env <name>  WHICH BACKEND / APP. A key in
  *                           `primitive/config.json`, supplying apiUrl,
- *                           appId and appName.
+ *                           appId and appName — or a machine-local
+ *                           environment (a child app) in
+ *                           `.primitive/local.json`.
  *
  * They cross in practice — a production front end against the alpha backend, a
  * customer whose dev and prod builds both hit primitiveapi.com with different
@@ -22,13 +24,23 @@
  * "environment" is ambiguous here. An app whose `.env.<mode>` carries values
  * coupled to one backend can pin the pair anyway: declare
  * `VITE_EXPECTED_PRIMITIVE_ENV=<name>` there and a mismatched `--primitive-env`
- * stops this script before it plans or builds anything.
+ * stops this script before it plans or builds anything. A machine-local
+ * environment pairs with the mode that declares its `tree`.
+ *
+ * `--preview-alias <alias>` uploads a worker version under that alias
+ * (`wrangler versions upload`) instead of deploying, so a branch front end
+ * runs on its own URL beside the live worker. Against a machine-local child
+ * the alias origin is then registered as one of the child's preview origins
+ * (`primitive apps children add-preview-origin`), so its CORS and sign-in
+ * checks accept it. A live deploy to a child warns: it replaces the worker
+ * everyone uses.
  *
  * Examples:
  *   pnpm cf-deploy --deploy-env production --primitive-env prod
  *   pnpm cf-deploy --deploy-env production --primitive-env alpha
  *   pnpm cf-deploy --deploy-env production --primitive-env prod --check
  *   pnpm cf-deploy --deploy-env production --primitive-env prod -- --dry-run
+ *   pnpm cf-deploy --deploy-env production --primitive-env feature-x --preview-alias feature-x
  *
  * `primitive/config.json` is the ONLY place the backend URL and app ID are
  * typed. This script reads them from there and passes them to the worker as
@@ -144,13 +156,26 @@ const IDENTITY_KEYS = ["VITE_APP_ID", "VITE_API_URL", "VITE_WS_URL", "VITE_APP_N
 /** Opt-in: the Primitive environment a deploy environment is meant to pair with. */
 const EXPECTED_ENV_KEY = "VITE_EXPECTED_PRIMITIVE_ENV";
 
-const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--check] [-- wrangler args...]
+/** Machine-local state, beside the project's `primitive/` tree. */
+const LOCAL_STATE_DISPLAY = ".primitive/local.json";
 
-  --deploy-env <name>     Which front end: the Vite mode and the wrangler.toml
-                          [env.<name>] section. e.g. production
-  --primitive-env <name>  Which backend/app: an environment in
-                          primitive/config.json. e.g. prod, alpha
-  --check                 Print the resolved pair and the exact commands, then exit.
+/** The environment names the CLI accepts, as `env-resolver-core.ts` has it. */
+const ENVIRONMENT_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+/** What wrangler prints after `versions upload`: the per-version and the per-alias URL. */
+const VERSION_URL_LINE = /Version Preview URL:\s*(https?:\/\/\S+)/;
+const ALIAS_URL_LINE = /Version Preview Alias URL:\s*(https?:\/\/\S+)/;
+
+const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> [--preview-alias <alias>] [--check] [-- wrangler args...]
+
+  --deploy-env <name>      Which front end: the Vite mode and the wrangler.toml
+                           [env.<name>] section. e.g. production
+  --primitive-env <name>   Which backend/app: an environment in
+                           primitive/config.json (e.g. prod, alpha), or a
+                           machine-local one in .primitive/local.json
+  --preview-alias <alias>  Upload a preview version under this alias instead
+                           of deploying the live worker.
+  --check                  Print the resolved pair and the exact commands, then exit.
 
 Both are required — neither is inferred from the other.
 
@@ -165,6 +190,7 @@ function parseArgs(argv) {
   const parsed = {
     deployEnv: null,
     primitiveEnv: null,
+    previewAlias: null,
     check: false,
     passthrough: [],
   };
@@ -183,6 +209,18 @@ function parseArgs(argv) {
       parsed.primitiveEnv = argv[++i] ?? null;
     } else if (arg.startsWith("--primitive-env=")) {
       parsed.primitiveEnv = arg.slice("--primitive-env=".length);
+    } else if (arg === "--preview-alias") {
+      const value = argv[i + 1];
+      if (value === undefined || value === "" || value.startsWith("-")) {
+        fail("Missing value for --preview-alias: name the alias, e.g. --preview-alias feature-x.", "", USAGE);
+      }
+      parsed.previewAlias = value;
+      i++;
+    } else if (arg.startsWith("--preview-alias=")) {
+      parsed.previewAlias = arg.slice("--preview-alias=".length);
+      if (!parsed.previewAlias) {
+        fail("Missing value for --preview-alias: name the alias, e.g. --preview-alias feature-x.", "", USAGE);
+      }
     } else if (arg === "--check" || arg === "--dry-run-plan") {
       parsed.check = true;
     } else if (!arg.startsWith("-")) {
@@ -251,8 +289,99 @@ function findProjectConfigPath() {
   }
 }
 
-/** Reads the environment identity for `name`, failing loudly on anything odd. */
-function readPrimitiveEnvironment(name) {
+/** `primitive/config.json`'s project root: the directory holding `primitive/`. */
+function projectRootForConfigPath(configPath) {
+  const dir = dirname(configPath);
+  return basename(dir) === "primitive" ? dirname(dir) : dir;
+}
+
+/**
+ * Every machine-local environment in `.primitive/local.json`, validated as the
+ * CLI's resolver validates them (`parseLocalEnvironments`): the WHOLE map,
+ * before anything is selected, so a tree this script accepts is never one the
+ * CLI codegen and the Vite build then refuse. An entry needs non-empty
+ * `apiUrl` and `appId` strings and a `tree` naming a committed environment,
+ * and may not carry a committed environment's name. No file means none.
+ */
+function readLocalEnvironments(configPath, committed) {
+  const path = join(projectRootForConfigPath(configPath), ".primitive", "local.json");
+  if (!existsSync(path)) return {};
+
+  const unreadable = (detail) =>
+    fail(
+      `${LOCAL_STATE_DISPLAY} (${path}) is unreadable: ${detail}.`,
+      `Delete the file or re-run 'primitive env use <name>'.`,
+    );
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (err) {
+    unreadable(err.message);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    unreadable("expected a JSON object");
+  }
+  const selected = parsed.selectedEnvironment;
+  if (selected !== undefined && selected !== null && typeof selected !== "string") {
+    unreadable(`"selectedEnvironment" must be a string`);
+  }
+
+  const raw = parsed.environments;
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    unreadable(`"environments" must be an object keyed by environment name`);
+  }
+  const committedNames = Object.keys(committed);
+  const badEntry = (name, detail) =>
+    fail(
+      `${LOCAL_STATE_DISPLAY} (${path}): machine-local environment "${name}" ${detail}.`,
+      `Fix or remove the "${name}" entry under "environments" in ${LOCAL_STATE_DISPLAY}.`,
+    );
+
+  const environments = {};
+  for (const [name, entry] of Object.entries(raw)) {
+    if (!ENVIRONMENT_NAME.test(name)) {
+      badEntry(name, "is not a valid environment name (letters, digits, dashes and underscores, starting with a letter or digit)");
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) badEntry(name, "must be an object");
+    if (typeof entry.apiUrl !== "string" || !entry.apiUrl.trim()) badEntry(name, `has no "apiUrl" string`);
+    if (typeof entry.appId !== "string" || !entry.appId.trim()) {
+      badEntry(name, `has no "appId" naming the app it selects`);
+    }
+    if (typeof entry.tree !== "string" || !entry.tree.trim()) {
+      badEntry(name, `has no "tree" naming the committed environment whose configuration tree it uses`);
+    }
+    const tree = entry.tree.trim();
+    if (Object.hasOwn(committed, name)) {
+      badEntry(
+        name,
+        "has the name of a committed environment in primitive/config.json; a machine-local environment needs a name of its own",
+      );
+    }
+    if (!Object.hasOwn(committed, tree)) {
+      badEntry(
+        name,
+        `has "tree": "${tree}", which is not an environment in primitive/config.json (available: ${committedNames.join(", ") || "(none)"})`,
+      );
+    }
+    environments[name] = {
+      apiUrl: entry.apiUrl.trim().replace(/\/$/, ""),
+      appId: entry.appId.trim(),
+      appName: typeof entry.appName === "string" ? entry.appName : undefined,
+      tree,
+      path,
+    };
+  }
+  return environments;
+}
+
+/**
+ * Reads the environment identity for `name`, failing loudly on anything odd:
+ * a committed environment in `primitive/config.json`, else a machine-local
+ * one in `.primitive/local.json`. `checkPairing` is called with what `name`
+ * turned out to be, before that environment's own fields are judged.
+ */
+function readPrimitiveEnvironment(name, checkPairing) {
   const configPath = findProjectConfigPath();
   if (!configPath) {
     // The remedy names `primitive init` and nothing else (#3154): `env add`
@@ -282,14 +411,37 @@ function readPrimitiveEnvironment(name) {
     fail(`${configPath} has no "environments" object.`);
   }
 
-  const entry = config.environments[name];
+  const locals = readLocalEnvironments(configPath, config.environments);
+  const entry = Object.hasOwn(config.environments, name) ? config.environments[name] : undefined;
   if (!entry) {
-    const available = Object.keys(config.environments).join(", ") || "(none)";
+    const local = Object.hasOwn(locals, name) ? locals[name] : undefined;
+    if (local) {
+      checkPairing({ name, local: true, tree: local.tree });
+      // A child has no web counterpart of its own, so no association
+      // document names it (#4117: a local entry's webUrl/iosAppId are not read).
+      return {
+        name,
+        apiUrl: local.apiUrl,
+        appId: local.appId,
+        appName: local.appName,
+        iosAppId: undefined,
+        webUrl: undefined,
+        configPath,
+        localPath: local.path,
+        tree: local.tree,
+        local: true,
+      };
+    }
+    checkPairing({ name, local: false });
+    const available =
+      [...Object.keys(config.environments), ...Object.keys(locals).map((n) => `${n} (local)`)].join(", ") ||
+      "(none)";
     fail(
-      `Primitive environment "${name}" is not defined in ${configPath}.`,
+      `Primitive environment "${name}" is not defined in ${configPath} or ${LOCAL_STATE_DISPLAY}.`,
       `Available: ${available}`,
     );
   }
+  checkPairing({ name, local: false });
   if (typeof entry.apiUrl !== "string" || !entry.apiUrl) {
     fail(`Primitive environment "${name}" has no "apiUrl" in ${configPath}.`);
   }
@@ -361,6 +513,8 @@ function readPrimitiveEnvironment(name) {
     iosAppId,
     webUrl,
     configPath,
+    tree: name,
+    local: false,
   };
 }
 
@@ -459,16 +613,22 @@ function assertNoIdentityOverrides(deployEnv) {
  * never sets Vite's `envDir`, and a cross-wired real deploy under a custom one
  * still fails inside the build.
  */
-function assertPairing(deployEnv, primitiveEnv) {
+function assertPairing(deployEnv, env) {
   const { value: declared, where } = resolveBuildEnvValue(EXPECTED_ENV_KEY, deployEnv);
 
-  if (!declared || declared === primitiveEnv) return;
+  // A machine-local environment (a child app) shares its tree's
+  // configuration, so the mode that declares the tree accepts it.
+  if (!declared || declared === env.name || (env.local && declared === env.tree)) return;
 
+  const given = env.local
+    ? `"${env.name}" (machine-local, tree "${env.tree}")`
+    : `"${env.name}"`;
   fail(
     `Wrong pair: deploy environment "${deployEnv}" declares ${EXPECTED_ENV_KEY}="${declared}"`,
-    `(in ${where}), but --primitive-env is "${primitiveEnv}".`,
+    `(in ${where}), but --primitive-env is ${given}.`,
     "",
     `Deploy the pair you meant: --deploy-env ${deployEnv} --primitive-env ${declared}`,
+    `(or a machine-local environment whose tree is "${declared}")`,
     `— or change/remove the ${EXPECTED_ENV_KEY} declaration in ${where}.`,
   );
 }
@@ -668,6 +828,12 @@ function assertPassthroughIsSafe(passthrough) {
         "Use --deploy-env, which sets both the Vite mode and the Wrangler environment.",
       );
     }
+    if (arg === "--preview-alias" || arg.startsWith("--preview-alias=")) {
+      fail(
+        `Passthrough argument "${arg}" would choose between a preview and a live deploy.`,
+        "Use --preview-alias before --, which uploads a preview version and registers its origin.",
+      );
+    }
     const varValue = arg === "--var" ? passthrough[i + 1] : arg.startsWith("--var=") ? arg.slice("--var=".length) : null;
     if (varValue && /^(APP_ID|API_ORIGIN)[:=]/.test(varValue)) {
       fail(
@@ -695,6 +861,47 @@ function runCommand(command, args, extraEnv = {}) {
   });
 }
 
+/**
+ * Like `runCommand`, but also returns what the command printed on stdout,
+ * echoed line for line as it arrives: the preview URL is only in wrangler's
+ * output.
+ */
+function runCommandCapturing(command, args) {
+  return new Promise((resolvePromise, reject) => {
+    console.log(`\n> ${command} ${args.join(" ")}\n`);
+    const child = spawn(command, args, {
+      stdio: ["inherit", "pipe", "inherit"],
+      shell: false,
+      cwd: ROOT_DIR,
+      env: process.env,
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      output += chunk.toString();
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise(output);
+      else reject(new Error(`Command failed with exit code ${code}`));
+    });
+    child.on("error", reject);
+  });
+}
+
+/** The `primitive` argv that registers `origin` on the child `env` names. */
+function registrationArgs(env, origin) {
+  return ["--env", env.name, "apps", "children", "add-preview-origin", env.name, origin, "--app-id", env.appId];
+}
+
+/** Where a committed environment's preview origin has to be authored instead. */
+function authoringNote(env, origin) {
+  return [
+    `"${env.name}" is a committed environment, so nothing is registered: its app is fully described by primitive/${env.name}/app.toml.`,
+    `To sign in from the preview, add ${origin} to [cors].allowedOrigins and to [auth].emailRedirectUris`,
+    `in primitive/${env.name}/app.toml, then run 'primitive --env ${env.name} config push'.`,
+  ];
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -708,9 +915,11 @@ async function main() {
 
   assertPassthroughIsSafe(args.passthrough);
   assertNoIdentityOverrides(args.deployEnv);
-  assertPairing(args.deployEnv, args.primitiveEnv);
 
-  const env = readPrimitiveEnvironment(args.primitiveEnv);
+  const env = readPrimitiveEnvironment(args.primitiveEnv, (resolved) =>
+    assertPairing(args.deployEnv, resolved),
+  );
+  const preview = args.previewAlias !== null;
   // Decided before anything is printed or built: every refusal in here is a
   // wrong or stale association document, which fails silently once Apple has
   // cached it, so it stops a `--check` run exactly as it stops a real one.
@@ -731,12 +940,16 @@ async function main() {
   // into pnpm's temporary store, where no `allowBuilds` list of the app can
   // reach — and pnpm 10+ then refused the packages wrangler needs built
   // (esbuild, workerd) with ERR_PNPM_IGNORED_BUILDS before wrangler ran (#3415).
+  //
+  // A preview uploads a version under the alias instead: the vars travel with
+  // the version, and the live worker keeps serving what it served.
   const wranglerArgs = [
     "exec",
     "wrangler",
-    "deploy",
+    ...(preview ? ["versions", "upload"] : ["deploy"]),
     "--env",
     args.deployEnv,
+    ...(preview ? ["--preview-alias", args.previewAlias] : []),
     "--var",
     `APP_ID:${env.appId}`,
     "--var",
@@ -746,14 +959,29 @@ async function main() {
 
   console.log("");
   console.log(`[deploy] Deploy environment:    ${args.deployEnv}  (Vite mode + wrangler [env.${args.deployEnv}])`);
-  console.log(`[deploy] Primitive environment: ${env.name}`);
+  console.log(
+    `[deploy] Primitive environment: ${env.name}` +
+      (env.local ? `  (machine-local, ${LOCAL_STATE_DISPLAY}; tree ${env.tree})` : ""),
+  );
   console.log(`[deploy]   apiUrl:  ${env.apiUrl}`);
   console.log(`[deploy]   appId:   ${env.appId}`);
   console.log(`[deploy]   appName: ${env.appName ?? "(unset)"}`);
   console.log(`[deploy]   iosAppId: ${env.iosAppId ?? "(unset)"}`);
   console.log(`[deploy]   config:  ${env.configPath}`);
   console.log(`[deploy] Association: ${association.describe}.`);
+  if (preview) console.log(`[deploy] Preview alias: ${args.previewAlias} (the live worker is not changed)`);
   console.log("");
+
+  if (env.local && !preview) {
+    console.warn(
+      `[deploy] Warning: Primitive environment "${env.name}" is a machine-local child app (tree "${env.tree}"), ` +
+        `and this is a live deploy: it replaces what wrangler [env.${args.deployEnv}] serves for everyone.`,
+    );
+    console.warn(
+      `[deploy]   To try a branch without touching the live worker, add --preview-alias <alias>. Continuing.`,
+    );
+    console.warn("");
+  }
 
   if (args.check) {
     console.log("[deploy] --check: nothing will be built, written or deployed.");
@@ -761,7 +989,18 @@ async function main() {
     console.log(`[deploy] codegen env: PRIMITIVE_ENV=${buildEnv.PRIMITIVE_ENV}`);
     console.log(`[deploy] build:    pnpm ${buildArgs.join(" ")}`);
     console.log(`[deploy] build env: PRIMITIVE_ENV=${buildEnv.PRIMITIVE_ENV}`);
-    console.log(`[deploy] deploy:   pnpm ${wranglerArgs.join(" ")}`);
+    console.log(`[deploy] ${preview ? "preview: " : "deploy:  "} pnpm ${wranglerArgs.join(" ")}`);
+    if (preview) {
+      if (env.local) {
+        console.log(
+          `[deploy] register: primitive ${registrationArgs(env, "<origin of the preview alias URL>").join(" ")}`,
+        );
+      } else {
+        for (const line of authoringNote(env, "<origin of the preview alias URL>")) {
+          console.log(`[deploy] ${line}`);
+        }
+      }
+    }
     return;
   }
 
@@ -786,14 +1025,70 @@ async function main() {
     fail(`Build failed: ${error.message}`);
   }
 
-  console.log("\n[deploy] Deploying to Cloudflare Workers...");
-  try {
-    await runCommand("pnpm", wranglerArgs);
-  } catch (error) {
-    fail(`Deploy failed: ${error.message}`);
+  if (!preview) {
+    console.log("\n[deploy] Deploying to Cloudflare Workers...");
+    try {
+      await runCommand("pnpm", wranglerArgs);
+    } catch (error) {
+      fail(`Deploy failed: ${error.message}`);
+    }
+    console.log("\n[deploy] Deployment complete!");
+    return;
   }
 
-  console.log("\n[deploy] Deployment complete!");
+  console.log(`\n[deploy] Uploading a preview version under the alias "${args.previewAlias}"...`);
+  let output;
+  try {
+    output = await runCommandCapturing("pnpm", wranglerArgs);
+  } catch (error) {
+    fail(`Preview upload failed: ${error.message}`);
+  }
+  await finishPreview(env, output);
+}
+
+/**
+ * After a successful upload: print the alias URL (the origin a branch keeps
+ * across uploads) and register its origin on a machine-local child, or say
+ * where a committed environment's origin is authored. A failure here leaves
+ * the upload in place and names the command that finishes the job.
+ */
+async function finishPreview(env, output) {
+  const text = output.replace(/\x1b\[[0-9;]*m/g, "");
+  const aliasUrl = ALIAS_URL_LINE.exec(text)?.[1];
+  const versionUrl = VERSION_URL_LINE.exec(text)?.[1];
+
+  console.log("");
+  if (versionUrl) console.log(`[deploy] Version URL: ${versionUrl}`);
+  if (!aliasUrl) {
+    fail(
+      "The preview version was uploaded, but wrangler printed no \"Version Preview Alias URL\" line, so its origin is unknown.",
+      "Check the alias URL in the Cloudflare dashboard (wrangler 4.110 or later prints it), then:",
+      ...(env.local
+        ? [`  primitive ${registrationArgs(env, "<origin>").join(" ")}`]
+        : authoringNote(env, "<origin>").map((line) => `  ${line}`)),
+    );
+  }
+  const origin = new URL(aliasUrl).origin;
+  console.log(`[deploy] Preview URL: ${aliasUrl}`);
+
+  if (!env.local) {
+    for (const line of authoringNote(env, origin)) console.log(`[deploy] ${line}`);
+    console.log("\n[deploy] Preview complete!");
+    return;
+  }
+
+  const register = registrationArgs(env, origin);
+  console.log(`[deploy] Registering ${origin} as a preview origin of child "${env.name}"...`);
+  try {
+    await runCommand("primitive", register);
+  } catch (error) {
+    fail(
+      `The preview upload stands, but registering its origin failed: ${error.message}.`,
+      "Until it is registered, the child refuses sign-in and API calls from the preview. Run:",
+      `  primitive ${register.join(" ")}`,
+    );
+  }
+  console.log("\n[deploy] Preview complete!");
 }
 
 main().catch((error) => {

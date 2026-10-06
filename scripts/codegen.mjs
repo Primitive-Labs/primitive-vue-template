@@ -75,6 +75,11 @@ function readJson(path) {
  * by `primitive env use`), then the committed `defaultEnvironment`, then a sole
  * environment. A selection naming an undefined environment resolves to nothing
  * here on purpose — the CLI reports that properly, with the available names.
+ *
+ * A selection may name a machine-local environment (#4117): an entry in the
+ * `environments` map of `.primitive/local.json`, a child app that uses a
+ * committed environment's tree. The CLI reads that tree, so the selection
+ * resolves to it — `null` would widen the guard to every environment.
  */
 function resolveSelection(projectRoot) {
   const config = readJson(join(projectRoot, "primitive", "config.json"));
@@ -93,9 +98,22 @@ function resolveSelection(projectRoot) {
     process.env.PRIMITIVE_ENV || selected || config.defaultEnvironment || null;
 
   const name = candidate ?? (names.length === 1 ? names[0] : null);
-  if (!name || !Object.prototype.hasOwnProperty.call(environments, name)) return null;
+  if (!name) return null;
+  if (Object.prototype.hasOwnProperty.call(environments, name)) return { name };
 
-  return { name };
+  const localEnvironments =
+    local.environments && typeof local.environments === "object" ? local.environments : {};
+  const entry = Object.prototype.hasOwnProperty.call(localEnvironments, name)
+    ? localEnvironments[name]
+    : null;
+  // Trimmed as the CLI trims it, so an entry the CLI accepts resolves here too.
+  const tree = entry && typeof entry === "object" && typeof entry.tree === "string"
+    ? entry.tree.trim()
+    : null;
+  if (!tree || !Object.prototype.hasOwnProperty.call(environments, tree)) {
+    return null;
+  }
+  return { name: tree };
 }
 
 /** True when `<treeRoot>/<env>/<kind>/` holds at least one `.toml`. */

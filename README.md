@@ -274,6 +274,9 @@ PRIMITIVE_ENV=dev pnpm test --mode alpha    # stops before signing in
 ```
 
 - **Opt-in.** No declaration (the default) keeps the axes fully independent.
+- A child app's machine-local environment pairs with the mode that declares
+  its tree: under `VITE_EXPECTED_PRIMITIVE_ENV=alpha`, a child of `alpha` runs,
+  a child of `dev` is refused.
 - A value in the base `.env` is the default for every mode; `.env.<mode>`
   overrides it, and an empty value there switches the check off for that mode.
 - `VITE_EXPECTED_PRIMITIVE_ENV=<name>` in the shell wins over the files — which
@@ -339,7 +342,7 @@ is inferred from the other:
 | Flag | Selects | Which means |
 |---|---|---|
 | `--deploy-env <name>` | the deploy environment | the Vite mode (`.env.<name>`) **and** the `[env.<name>]` block in `wrangler.toml` |
-| `--primitive-env <name>` | the Primitive environment | the backend/app pair in `.primitive/config.json` |
+| `--primitive-env <name>` | the Primitive environment | the backend/app pair in `primitive/config.json`, or a child app's machine-local environment |
 
 They cross in practice — a production front end against the alpha backend, or
 dev and prod builds that both hit `primitiveapi.com` with different app IDs —
@@ -411,6 +414,32 @@ Pass extra wrangler flags after `--`:
 ```bash
 pnpm cf-deploy --deploy-env production --primitive-env prod -- --dry-run
 ```
+
+### Preview a branch against a child app
+
+A child app (`primitive apps children create feature-x`) is a copy of the
+parent app for a branch. To run the branch's front end against it, upload a
+preview version of the worker under an alias instead of deploying:
+
+```bash
+pnpm cf-deploy --deploy-env production --primitive-env feature-x --preview-alias feature-x
+```
+
+The script uploads the version with the child's app ID, prints the preview URL
+(`https://feature-x-my-app-prod.your-subdomain.workers.dev`), and registers
+that origin on the child, so the child's CORS and email sign-in checks accept
+it. The live worker is untouched. Run the same command again after a change;
+the alias URL stays the same. `--check` prints the upload and the registration
+without running them.
+
+- Against a committed environment a preview registers nothing. To sign in from
+  it, add the preview origin to `[cors].allowedOrigins` and
+  `[auth].emailRedirectUris` in `primitive/<env>/app.toml` and push.
+- Registration runs the `primitive` CLI. If it fails, the upload stays and the
+  script prints the command to run by hand.
+- A deploy to a child **without** `--preview-alias` prints a warning and
+  continues: it replaces the live worker of that deploy environment for
+  everyone.
 
 ## Adding More Environments
 
