@@ -63,6 +63,23 @@ primitive guides get <topic>           # the topic's default variant
 4. Before running a `primitive` command that changes server state, read the `Env | App | Server`
    header every command prints and confirm it names the environment you intend. The
    `configuration` guide explains projects and environments.
+   If the change needs a `config push` to test and that environment is shared — with other
+   developers, live users, or the user's own work in another worktree — recommend a child app
+   instead, and follow the `configuration` guide's "Child apps" workflow.
+5. A plain `primitive login` holds the default scope, which cannot delete or change roles. When
+   a command is refused with a 403, act on its `code`, not on the command it prints:
+   - `INSUFFICIENT_SCOPE`: it prints the exact `primitive login --scope …` command that grants
+     the missing scope. Ask the user to run it (`admin` opens the browser), then retry once.
+   - `PROTECTED_APP_PIN_REQUIRED`: the app is protected. Ask the user to run the printed
+     `primitive login --scope … --app <id>` command, then retry once.
+   - `APP_NOT_PINNED`: the login's pins do not reach the app or route the command named. First
+     confirm the command targets the app you intended (`primitive whoami` shows the pins); only
+     then ask the user to run the printed command.
+
+   If a command says *Your login predates scoped sessions*, ask the user to run
+   `primitive login`. An unattended run uses a CI session the user creates with
+   `primitive auth sessions create` and passes in `PRIMITIVE_TOKEN`; never create one yourself.
+   The `configuration` guide has the details.
 
 ## Reviewing code (automatic, after every change)
 

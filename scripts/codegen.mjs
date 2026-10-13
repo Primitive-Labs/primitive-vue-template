@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
- * Regenerate the typed database and workflow surfaces from this app's SYNCED
- * server config — the committed `primitive/<env>/` tree.
+ * Regenerate the typed workflow surface from this app's SYNCED server config —
+ * the committed `primitive/<env>/` tree. (The database codegen retired with the
+ * clients' direct database access, #3189; an app reaches its databases through
+ * server functions.)
  *
  * Why a script and not a shell one-liner in `package.json`: the tree sits
  * beside `primitive/config.json`, and that config is not always in this
@@ -9,7 +11,7 @@
  * native client in sibling directories), in which case the project config and
  * its export live at the REPO ROOT and this package is one client inside
  * it. A client-relative `ls primitive/*​/…` guard never matches there,
- * so both codegens were skipped silently and every build compiled whatever
+ * so the codegen was skipped silently and every build compiled whatever
  * generated code happened to be in the tree.
  *
  * So: walk up to the nearest `primitive/config.json` (the way git finds
@@ -167,10 +169,6 @@ const projectRoot = findProjectRoot(process.cwd());
 if (projectRoot) {
   const treeRoot = join(projectRoot, "primitive");
   const selection = resolveSelection(projectRoot);
-
-  if (hasSyncedToml(treeRoot, "database-type-configs", selection)) {
-    runPrimitive(["databases", "codegen", "-o", "src/types/generated"]);
-  }
 
   if (hasSyncedToml(treeRoot, "workflows", selection)) {
     runPrimitive(["workflows", "codegen", "-o", "src/types/generated/workflows"]);

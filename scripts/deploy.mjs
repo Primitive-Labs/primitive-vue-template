@@ -931,7 +931,7 @@ async function main() {
   // making the one build that SHIPS the one build compiling whatever generated
   // types happened to be in the tree (#3078). It runs with the same
   // environment as the build: the CLI codegen resolves PRIMITIVE_ENV, so a
-  // codegen without it would emit workflow and database types from the
+  // codegen without it would emit workflow types from the
   // developer's local backend and ship them in the requested environment.
   const codegenArgs = ["codegen"];
   const buildEnv = { PRIMITIVE_ENV: env.name };
