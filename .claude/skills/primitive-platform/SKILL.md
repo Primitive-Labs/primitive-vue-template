@@ -66,8 +66,9 @@ primitive guides get <topic>           # the topic's default variant
    If the change needs a `config push` to test and that environment is shared — with other
    developers, live users, or the user's own work in another worktree — recommend a child app
    instead, and follow the `configuration` guide's "Child apps" workflow.
-5. A plain `primitive login` holds the default scope, which cannot delete or change roles, and
-   cannot write to an app whose protection level is `protected`. When a command is refused with
+5. A plain `primitive login` holds the default scope, which cannot delete apps other than
+   `internal` ones (every child app is `internal`), cannot delete databases or change roles,
+   and cannot write to an app whose protection level is `protected`. When a command is refused with
    a 403, act on its `code`, not on the command it prints:
    - `INSUFFICIENT_SCOPE`: it prints the exact `primitive login …` command that grants the
      missing scope (a missing `admin` prints `primitive login --step-up --scope … --app <id>`).
@@ -199,7 +200,11 @@ a grep:
   sources, not its dependencies.
 - **The configuration tree.** A deprecated key or spelling in the app's `primitive/`
   TOML is reported when the tree is pushed; the `configuration` guide explains how to
-  check a tree without applying it.
+  check a tree without applying it. When the upgrade changes the tree and the
+  environment it is pushed to is shared — with other developers, live users, or the
+  user's own work in another worktree — push it to a child app first and verify it
+  there, following the `configuration` guide's "Child apps" workflow; push to the
+  shared environment once the upgrade is merged.
 
 A surface an earlier scan reported as deprecated may since have been removed, and a
 removed surface is not a lint warning but a build error, a refused request or a
@@ -272,7 +277,10 @@ guides for the app's feature areas. Compare against what the app actually does:
 
 Run the app's tests, apply the post-change review above to everything modified, and
 update the feedback doc's upgrade stamp (date, channel, versions, and the template
-commit synced in Step 6).
+commit synced in Step 6). If the upgrade changed the configuration tree and the
+environment is shared, verify against the child app from Step 4, not the shared
+environment; the `configuration` guide's "Child apps" workflow covers applying the
+merged tree to the parent and deleting the child.
 
 ### The platform feedback doc
 

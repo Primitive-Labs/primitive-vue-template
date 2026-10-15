@@ -124,6 +124,8 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm lint` | ESLint with `--fix --cache`, using the type-aware `recommendedTypeChecked` preset (unhandled promises, `async` without `await`, redundant assertions); findings are fixed in source, not suppressed. Also warns on every use of a deprecated platform API |
 | `pnpm format` / `pnpm format:check` | Prettier write / check |
 | `pnpm cf-deploy --deploy-env <name> --primitive-env <name>` | Build and deploy to Cloudflare Workers (see below) |
+| `pnpm child:up <slug> [--port <n>]` | Create or resume a child app for this line of work, run `scripts/child-app-init`, push the tree into it, allow the dev port and select it (see below) |
+| `pnpm child:down <slug> [--skip-teardown]` | Run `scripts/child-app-teardown`, then delete the child app |
 | `pnpm clean` / `pnpm clean-modules` | Remove `dist/` / `node_modules` + lockfile |
 
 ## Running Harness Tests Headlessly (CI)
@@ -291,6 +293,43 @@ PRIMITIVE_ENV=dev pnpm test --mode alpha    # stops before signing in
   builds or prints a plan. It reads `.env*` from the project root; if you have
   moved Vite's `envDir`, a real deploy still fails inside the build, but
   `--check` will not see the declaration.
+
+## Child Apps for Parallel Work
+
+When several agents or git worktrees work on this app at once, give each line
+of work its own child app — a copy of the selected environment's app that
+shares its `primitive/<env>/` tree — so a `config push` from one branch never
+reaches the others. With the parent environment selected:
+
+```bash
+pnpm child:up feature-x --port 5174
+pnpm dev --port 5174
+# ... work, push, test ...
+pnpm child:down feature-x
+```
+
+`child:up` creates the child (or attaches or resumes one that exists), checks
+that it is the environment it acts on, runs your `scripts/child-app-init`,
+pushes the tree into it, allows `http://localhost:<port>` (default 5173) and
+selects it. Rerun it to resume an interrupted run. `child:down` runs your
+`scripts/child-app-teardown`, then deletes the child and its local state.
+
+The template ships neither hook: what a fresh child needs is your app's call.
+Add them as executable files:
+
+- `scripts/child-app-init` — seed the child: test users, databases, its own
+  config vars (`primitive config set vars KEY=value`). It runs before the first
+  push and on every `child:up`, so make it safe to repeat.
+- `scripts/child-app-teardown` — revoke or delete anything the child created
+  outside the platform (third-party connections, webhooks). Deleting the child
+  doesn't reach those, so this is your app's responsibility;
+  `child:down --skip-teardown` skips the hook and leaves them behind.
+
+Both run from the project root with `PRIMITIVE_ENV` (the child), `CHILD_APP_ID`,
+`CHILD_APP_SLUG` and `PARENT_ENV` set; address the child through
+`PRIMITIVE_ENV`, not the selected environment. A slug must not be the name of
+a committed environment. See `primitive guides get configuration` ("Child
+apps") for the rest of the workflow.
 
 ## Optional: Set Up Git
 
