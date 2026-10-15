@@ -66,15 +66,21 @@ primitive guides get <topic>           # the topic's default variant
    If the change needs a `config push` to test and that environment is shared — with other
    developers, live users, or the user's own work in another worktree — recommend a child app
    instead, and follow the `configuration` guide's "Child apps" workflow.
-5. A plain `primitive login` holds the default scope, which cannot delete or change roles. When
-   a command is refused with a 403, act on its `code`, not on the command it prints:
-   - `INSUFFICIENT_SCOPE`: it prints the exact `primitive login --scope …` command that grants
-     the missing scope. Ask the user to run it (`admin` opens the browser), then retry once.
-   - `PROTECTED_APP_PIN_REQUIRED`: the app is protected. Ask the user to run the printed
-     `primitive login --scope … --app <id>` command, then retry once.
+5. A plain `primitive login` holds the default scope, which cannot delete or change roles, and
+   cannot write to an app whose protection level is `protected`. When a command is refused with
+   a 403, act on its `code`, not on the command it prints:
+   - `INSUFFICIENT_SCOPE`: it prints the exact `primitive login …` command that grants the
+     missing scope (a missing `admin` prints `primitive login --step-up --scope … --app <id>`).
+     Ask the user to run it (a step-up opens the browser), then retry once.
+   - `PROTECTED_APP_STEP_UP_REQUIRED`: the app is protected. Ask the user to run the printed
+     `primitive login --step-up --scope … --app <id>` command, then retry once. Never lower the
+     app's `protection` to get past it.
    - `APP_NOT_PINNED`: the login's pins do not reach the app or route the command named. First
      confirm the command targets the app you intended (`primitive whoami` shows the pins); only
      then ask the user to run the printed command.
+   - `PROTECTION_OWNER_ONLY` or `PROTECTION_FIXED_ON_CHILD`: the push changes a protection level
+     this login may not change. Unless the user asked for the change, restore the `protection`
+     line that `primitive config pull --only app` writes.
 
    If a command says *Your login predates scoped sessions*, ask the user to run
    `primitive login`. An unattended run uses a CI session the user creates with
