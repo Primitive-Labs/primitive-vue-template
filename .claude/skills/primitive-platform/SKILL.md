@@ -3,7 +3,7 @@ name: primitive-platform
 description: >
   Fetches the Primitive platform's agent guides and applies them. MUST be used whenever the user
   is writing or reviewing code that uses js-bao, js-bao-wss-client, primitive-app,
-  primitive-functions, or any Primitive platform feature (documents, databases, server functions,
+  primitive-functions, or any Primitive platform feature (databases, server functions,
   prompts, integrations, blobs, authentication, users/groups), and before running any `primitive`
   CLI command. All development guidance lives in the guides this skill fetches; after writing or
   modifying code that touches Primitive APIs, it cross-references the code against those guides
@@ -49,7 +49,7 @@ primitive guides get <topic>           # the topic's default variant
 - **Freshness.** Guides are cached under `~/.primitive/guides/` for 24 hours. After upgrading the
   CLI or the libraries, pass `--refresh` on the first `list` and `get`.
 - **Where to start.** `configuration` covers projects, environments, and pushing config;
-  `data-modeling` covers choosing where data lives; `inspecting-and-debugging` covers reading a
+  `databases` covers storing and partitioning data; `inspecting-and-debugging` covers reading a
   running app. For a CLI command you have not used, fetch the guide for its feature first.
 
 ## Writing code
@@ -68,8 +68,9 @@ primitive guides get <topic>           # the topic's default variant
    instead, and follow the `configuration` guide's "Child apps" workflow.
 5. A plain `primitive login` holds the default scope, which cannot delete apps other than
    `internal` ones (every child app is `internal`), cannot delete databases or change roles,
-   and cannot write to an app whose protection level is `protected`. When a command is refused with
-   a 403, act on its `code`, not on the command it prints:
+   and cannot write to an app whose protection level is `protected`. In a project it is pinned
+   to the project's apps on that server. When a command is refused with a 403, act on its
+   `code`, not on the command it prints:
    - `INSUFFICIENT_SCOPE`: it prints the exact `primitive login …` command that grants the
      missing scope (a missing `admin` prints `primitive login --step-up --scope … --app <id>`).
      Ask the user to run it (a step-up opens the browser), then retry once.
@@ -78,7 +79,8 @@ primitive guides get <topic>           # the topic's default variant
      app's `protection` to get past it.
    - `APP_NOT_PINNED`: the login's pins do not reach the app or route the command named. First
      confirm the command targets the app you intended (`primitive whoami` shows the pins); only
-     then ask the user to run the printed command.
+     then ask the user to run the `primitive -e <env> login` the error names, or the printed
+     command. Never ask for `primitive login --app all` to get around a pin.
    - `PROTECTION_OWNER_ONLY` or `PROTECTION_FIXED_ON_CHILD`: the push changes a protection level
      this login may not change. Unless the user asked for the change, restore the `protection`
      line that `primitive config pull --only app` writes.
