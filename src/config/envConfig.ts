@@ -1,4 +1,4 @@
-// Environment and js-bao configuration for the template app
+// Environment and client configuration for the template app
 import { allModels } from "@/models";
 import type { JsBaoClientOptions } from "js-bao-wss-client";
 import type { LogLevel } from "@/lib/logger";
@@ -21,10 +21,11 @@ const DEFAULT_OAUTH_CALLBACK_PATH = "/oauth/callback";
  *     window.location.origin, so it always tracks where the app is served;
  *   - an absolute URL -> honored as-is (escape hatch for a fixed callback).
  *
- * The result is always absolute, so every consumer (js-bao client, router
- * callback-path derivation, magic-link builder) can rely on it being a full
- * URL. This is the single place the app resolves the redirect URI — read it
- * via `config.oauthRedirectUri` everywhere else.
+ * The result is always absolute, so every consumer (the client, which builds
+ * emailed links and OAuth redirects from it, and the router's callback-path
+ * derivation) can rely on it being a full URL. This is the single place the
+ * app resolves the redirect URI — read it via `config.oauthRedirectUri`
+ * everywhere else.
  */
 export function resolveOauthRedirectUri(): string {
   const configured = import.meta.env.VITE_OAUTH_REDIRECT_URI?.trim();
@@ -40,7 +41,7 @@ export function resolveOauthRedirectUri(): string {
   }
 }
 
-// Raw environment-derived config shared between router, js-bao, and logging
+// Raw environment-derived config shared between router, client, and logging
 export const config = {
   appName: import.meta.env.VITE_APP_NAME ?? "Primitive Template App",
   appId: import.meta.env.VITE_APP_ID,
@@ -57,6 +58,12 @@ function getRefreshProxyBaseUrl(): string {
     : "/proxy";
 }
 
+/**
+ * The client options `main.ts` hands `initializeAppClient`: the environment's
+ * identity, the callback URL, session storage and the refresh proxy, the log
+ * level, and the generated models (`@/models`, rewritten by `pnpm codegen`
+ * from `primitive/<env>/db3-types/`).
+ */
 export function getJsBaoConfig(): JsBaoClientOptions {
   const auth = {
     persistJwtInStorage: true,
@@ -75,6 +82,7 @@ export function getJsBaoConfig(): JsBaoClientOptions {
     wsUrl: config.wsUrl,
     oauthRedirectUri: config.oauthRedirectUri,
     auth,
+    logLevel: getLogLevel(),
     models: allModels,
   };
 }
@@ -84,9 +92,8 @@ const VALID_LOG_LEVELS: LogLevel[] = ["debug", "info", "warn", "error", "none"];
 /**
  * Returns the desired log level for the template app.
  *
- * This is the only place the template reads VITE_LOG_LEVEL. Consumers should
- * call `getLogLevel` and pass the function into
- * `createPrimitiveApp({ getLogLevel })` and any app-created loggers.
+ * This is the only place the template reads VITE_LOG_LEVEL. The client
+ * options and the app's loggers (`src/lib/logger.ts`) read it from here.
  *
  * This factory is called once during bootstrap and is not reactive.
  */

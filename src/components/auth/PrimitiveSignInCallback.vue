@@ -1,22 +1,20 @@
 <script setup lang="ts">
 /**
- * Handles the OAuth and magic link callback redirect flows.
+ * The page an emailed sign-in link or an OAuth redirect opens.
  *
- * On successful sign-in, new-user onboarding (profile completion + passkey
- * prompt) is delegated to the shared onboarding route so every sign-in method
- * funnels through the same step — see `PrimitiveOnboarding.vue`. This component
- * only handles the callback itself (waitlist, access-denied, expired links,
- * errors) and then hands off.
+ * The client applies the callback grammar and signs the user in
+ * (`userStore.handleSignInCallback()`); this page shows what happened. On
+ * success it hands off to the shared onboarding route (profile completion +
+ * passkey prompt, `PrimitiveOnboarding.vue`) with the continue URL,
+ * `isNewUser` and `promptAddPasskey` as query params. Otherwise it shows the
+ * waitlist, access-denied, link-expired (with a resend to the address the
+ * link carried, from any tab or browser) or error state.
  */
 import { AlertTriangle, Clock, Loader2, Lock, Mail } from "@lucide/vue";
-import type { Component } from "vue";
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { getPendingInviteToken } from "@/lib/inviteToken";
 import { appBaseLogger } from "@/lib/logger";
-import { buildRouteOrUrl, resolveRouteOrUrl } from "@/lib/routeOrUrl";
 import { isIOS } from "@/lib/utils";
-import { jsBaoClientService } from "primitive-app";
 import { AUTH_CODES, useUserStore } from "@/stores/userStore";
 import { Button } from "../ui/button";
 import PrimitiveLogoSpinner from "@/components/shared/PrimitiveLogoSpinner.vue";
@@ -26,62 +24,19 @@ type CallbackState =
   | "waitlisted"
   | "access-denied"
   | "link-expired"
-  | "resending-link"
   | "link-resent"
   | "redirecting"
   | "error";
 
-interface Props {
-  /**
-   * Absolute/path URL to continue to after successful OAuth callback.
-   * Either `continueURL` or `continueRoute` must be provided.
-   */
-  continueURL?: string;
-  /**
-   * Named route to continue to after successful OAuth callback.
-   * Either `continueURL` or `continueRoute` must be provided.
-   */
-  continueRoute?: string;
-  /**
-   * Absolute/path login URL used when redirecting on error.
-   * Either `loginUrl` or `loginRoute` must be provided.
-   */
-  loginUrl?: string;
-  /**
-   * Named login route used when redirecting on error.
-   * Either `loginUrl` or `loginRoute` must be provided.
-   */
-  loginRoute?: string;
-  /**
-   * Named onboarding route that runs profile completion + passkey prompt for
-   * new users. When set, successful sign-ins are routed here (with the continue
-   * URL, `isNewUser`, and `promptAddPasskey` passed as query params) before
-   * landing on the continue URL. Either `onboardingRoute` or `onboardingUrl`
-   * may be provided; when neither is set, sign-in continues straight to the
-   * continue URL with no onboarding.
-   */
-  onboardingRoute?: string;
-  /**
-   * Absolute/path onboarding URL. Alternative to `onboardingRoute`.
-   */
-  onboardingUrl?: string;
-  /**
-   * Optional loading component to display while handling the OAuth callback.
-   * Defaults to `PrimitiveLogoSpinner` when not provided.
-   */
-  loadingComponent?: Component;
-}
-
-const props = defineProps<Props>();
-
 const user = useUserStore();
 const router = useRouter();
-const logger = appBaseLogger.forScope("PrimitiveOauthCallback");
+const logger = appBaseLogger.forScope("PrimitiveSignInCallback");
 
 // State
 const callbackState = ref<CallbackState>("processing");
 const errorMessage = ref<string | null>(null);
-const redirectTo = ref<string>("/");
+// Where the link would have continued: the resend carries it on.
+const continueUrl = ref<string>("/");
 
 // Magic link resend state
 const expiredLinkEmail = ref<string | null>(null);
@@ -99,80 +54,40 @@ async function handleCallback(): Promise<void> {
   const callbackLogger = logger.forScope("handleCallback");
 
   try {
-    const continueTarget = buildRouteOrUrl(
-      props.continueURL,
-      props.continueRoute
-    );
-    const loginTarget = buildRouteOrUrl(props.loginUrl, props.loginRoute);
-
-    const defaultContinueUrl = resolveRouteOrUrl(router, continueTarget);
-    const loginUrl = resolveRouteOrUrl(router, loginTarget);
-
-    callbackLogger.debug("Callback configured URLs:", {
-      href: typeof window !== "undefined" ? window.location.href : "",
-      defaultContinueUrl,
-      loginUrl,
-    });
-
-    const result = await user.handleOAuthCallback(defaultContinueUrl, loginUrl);
-
+    const result = await user.handleSignInCallback();
     callbackLogger.debug("Callback result:", result);
+    continueUrl.value = result.continueUrl;
 
     if (!result.ok) {
-      // Check for waitlisted state
-      if (
-        result.waitlisted ||
-        result.errorCode === AUTH_CODES.ADDED_TO_WAITLIST
-      ) {
+      if (result.errorCode === AUTH_CODES.ADDED_TO_WAITLIST) {
         callbackState.value = "waitlisted";
         return;
       }
 
-      // Check for invitation required (invite-only mode, no waitlist)
-      // Detect by error code or by message content
-      const msgLower = result.errorMessage?.toLowerCase() || "";
-      if (
-        result.errorCode === AUTH_CODES.INVITATION_REQUIRED ||
-        msgLower.includes("invitation") ||
-        msgLower.includes("invite-only") ||
-        msgLower.includes("invite only")
-      ) {
+      if (result.errorCode === AUTH_CODES.INVITATION_REQUIRED) {
         accessDeniedMessage.value =
           "This app is invite-only. You need an invitation to sign in.";
         callbackState.value = "access-denied";
-        redirectTo.value = result.redirectTo;
         return;
       }
 
-      // Check for domain not allowed
-      // Detect by error code or by message content
-      if (
-        result.errorCode === AUTH_CODES.DOMAIN_NOT_ALLOWED ||
-        msgLower.includes("domain") ||
-        msgLower.includes("email domain")
-      ) {
+      if (result.errorCode === AUTH_CODES.DOMAIN_NOT_ALLOWED) {
         accessDeniedMessage.value =
           "You need to sign in with an approved email domain to access this app.";
         callbackState.value = "access-denied";
-        redirectTo.value = result.redirectTo;
         return;
       }
 
-      // Check for expired/used magic link token
       if (result.tokenExpiredOrUsed) {
-        expiredLinkEmail.value = result.email || null;
-        redirectTo.value = result.redirectTo;
+        expiredLinkEmail.value = result.email ?? null;
         callbackState.value = "link-expired";
         return;
       }
 
-      errorMessage.value = "Authentication failed";
+      errorMessage.value = result.errorMessage || "Authentication failed";
       callbackState.value = "error";
-      redirectTo.value = result.redirectTo;
       return;
     }
-
-    redirectTo.value = result.redirectTo;
 
     callbackLogger.debug("Sign-in succeeded; handing off to onboarding", {
       isNewUser: result.isNewUser,
@@ -181,82 +96,21 @@ async function handleCallback(): Promise<void> {
 
     // Onboarding (profile completion + passkey prompt) runs on the shared
     // onboarding route so every sign-in method funnels through the same step.
-    goToOnboarding({
-      continueUrl: result.redirectTo,
-      isNewUser: result.isNewUser ?? false,
-      promptAddPasskey: result.promptAddPasskey,
-    });
+    callbackState.value = "redirecting";
+    const query: Record<string, string> = {
+      continueURL: result.continueUrl,
+      isNewUser: result.isNewUser ? "1" : "0",
+    };
+    if (result.promptAddPasskey) query.promptAddPasskey = "1";
+    // Navigation is fire-and-forget: a blocked route resolves to a navigation
+    // failure, and a guard that throws should surface as an unhandled rejection.
+    void router.push({ name: "onboarding", query });
   } catch (err: unknown) {
     callbackLogger.error("Callback error:", err);
-    handleError(err);
+    errorMessage.value =
+      err instanceof Error ? err.message : "An error occurred during sign-in";
+    callbackState.value = "error";
   }
-}
-
-/**
- * Hand off to the shared onboarding route, passing sign-in context as query
- * params (so it survives a refresh). When no onboarding target is configured,
- * continue straight to the app.
- */
-function goToOnboarding(opts: {
-  continueUrl: string;
-  isNewUser: boolean;
-  promptAddPasskey?: boolean;
-}): void {
-  callbackState.value = "redirecting";
-
-  const query: Record<string, string> = {
-    continueURL: opts.continueUrl,
-    isNewUser: opts.isNewUser ? "1" : "0",
-  };
-  if (opts.promptAddPasskey) query.promptAddPasskey = "1";
-
-  // Navigation is fire-and-forget: a blocked route resolves to a navigation
-  // failure, and a guard that throws should surface as an unhandled rejection.
-  if (props.onboardingRoute) {
-    void router.push({ name: props.onboardingRoute, query });
-    return;
-  }
-
-  if (props.onboardingUrl && typeof window !== "undefined") {
-    const url = new URL(props.onboardingUrl, window.location.origin);
-    for (const [k, v] of Object.entries(query)) {
-      url.searchParams.set(k, v);
-    }
-    void router.push(url.pathname + url.search + url.hash);
-    return;
-  }
-
-  // No onboarding route configured — continue straight into the app.
-  void router.push(opts.continueUrl);
-}
-
-function handleError(err: unknown): void {
-  // Check for specific auth error codes
-  if (err && typeof err === "object" && "code" in err) {
-    const code = (err as { code: string }).code;
-
-    if (code === AUTH_CODES.ADDED_TO_WAITLIST) {
-      callbackState.value = "waitlisted";
-      return;
-    }
-
-    if (code === AUTH_CODES.INVITATION_REQUIRED) {
-      errorMessage.value =
-        "This app is invite-only. You need an invitation to sign in.";
-      callbackState.value = "error";
-      return;
-    }
-
-    if (code === AUTH_CODES.DOMAIN_NOT_ALLOWED) {
-      errorMessage.value = "Your email domain is not allowed for this app.";
-      callbackState.value = "error";
-      return;
-    }
-  }
-
-  errorMessage.value =
-    err instanceof Error ? err.message : "An error occurred during sign-in";
-  callbackState.value = "error";
 }
 
 async function handleResendLink(): Promise<void> {
@@ -266,39 +120,21 @@ async function handleResendLink(): Promise<void> {
   }
 
   const resendLogger = logger.forScope("handleResendLink");
-  resendLogger.debug("Resending magic link to:", expiredLinkEmail.value);
+  resendLogger.debug("Resending sign-in email to:", expiredLinkEmail.value);
 
   isResendingLink.value = true;
   resendError.value = null;
 
   try {
-    // Get the base redirect URI from js-bao config
-    const config = jsBaoClientService.getConfig();
-    const baseRedirectUri = config?.oauthRedirectUri;
-
-    if (!baseRedirectUri) {
-      throw new Error("Redirect URI not configured");
-    }
-
-    // Encode state with email and continue URL (same as login page does)
-    // This allows the resend flow to work if this new link also expires.
-    // inviteToken is included so a pending invitation survives the resend.
-    const inviteToken = getPendingInviteToken();
-    const state = btoa(
-      JSON.stringify({
-        continueUrl: redirectTo.value,
-        email: expiredLinkEmail.value,
-        ...(inviteToken ? { inviteToken } : {}),
-      })
-    );
-    const separator = baseRedirectUri.includes("?") ? "&" : "?";
-    const redirectUriWithState = `${baseRedirectUri}${separator}state=${encodeURIComponent(state)}`;
-
-    await user.requestEmailSignIn(expiredLinkEmail.value, redirectUriWithState);
+    // The new link carries the same continue URL, so it lands where the
+    // expired one would have.
+    await user.requestEmailSignIn(expiredLinkEmail.value, {
+      continueUrl: continueUrl.value,
+    });
     resendLogger.debug("Sign-in email resent successfully");
     callbackState.value = "link-resent";
   } catch (err: unknown) {
-    resendLogger.error("Failed to resend magic link:", err);
+    resendLogger.error("Failed to resend sign-in email:", err);
     resendError.value =
       err instanceof Error ? err.message : "Failed to send link";
   } finally {
@@ -307,40 +143,12 @@ async function handleResendLink(): Promise<void> {
 }
 
 function goToLogin(): void {
-  const loginTarget = buildRouteOrUrl(props.loginUrl, props.loginRoute);
-  const loginUrl = resolveRouteOrUrl(router, loginTarget);
-  void router.push(loginUrl);
-}
-
-// Validation helpers
-function validateRouteExists(routeName: string, propName: string): boolean {
-  try {
-    router.resolve({ name: routeName });
-    return true;
-  } catch {
-    logger.error(
-      `Invalid ${propName}: route "${routeName}" does not exist. ` +
-        `Check that the route is defined in your router configuration.`
-    );
-    return false;
-  }
+  void router.push({ name: "login" });
 }
 
 // Lifecycle
 onMounted(() => {
   void user.loadAuthConfig();
-
-  // Validate route props early to catch configuration errors
-  if (props.continueRoute) {
-    validateRouteExists(props.continueRoute, "continueRoute");
-  }
-  if (props.loginRoute) {
-    validateRouteExists(props.loginRoute, "loginRoute");
-  }
-  if (props.onboardingRoute) {
-    validateRouteExists(props.onboardingRoute, "onboardingRoute");
-  }
-
   // handleCallback catches and reports every error itself.
   void handleCallback();
 });
@@ -352,7 +160,7 @@ onMounted(() => {
     v-if="callbackState === 'processing' || callbackState === 'redirecting'"
     class="min-h-screen flex items-center justify-center"
   >
-    <component :is="props.loadingComponent || PrimitiveLogoSpinner" />
+    <PrimitiveLogoSpinner />
   </div>
 
   <!-- Waitlisted State -->

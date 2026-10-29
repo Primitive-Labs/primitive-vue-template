@@ -1,23 +1,20 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import { initializeJsBao, setPrimitiveAppLogLevel } from "primitive-app";
 import App from "./App.vue";
 import router from "./router/routes";
-import { config, getJsBaoConfig, getLogLevel } from "./config/envConfig";
+import { config, getJsBaoConfig } from "./config/envConfig";
+import { initializeAppClient } from "./lib/client";
 import { useUserStore } from "./stores/userStore";
 import "./style.css";
 
 async function bootstrap() {
-  // Set log level
-  setPrimitiveAppLogLevel(getLogLevel());
-
   // Create Vue app and Pinia
   const app = createApp(App);
   const pinia = createPinia();
   app.use(pinia);
 
-  // Initialize js-bao client
-  initializeJsBao(getJsBaoConfig());
+  // The app's client: created on first use from these options
+  initializeAppClient(getJsBaoConfig());
 
   // Initialize user store (handles auth state)
   const userStore = useUserStore();

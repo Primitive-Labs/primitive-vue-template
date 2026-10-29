@@ -19,7 +19,14 @@ export default defineConfigWithVueTs(
     },
   },
 
-  globalIgnores(["**/dist/**", "**/dist-ssr/**", "**/coverage/**"]),
+  // `primitive/` is the configuration tree: `config push` writes the CLI's
+  // declarations for server functions there, which are not this app's code.
+  globalIgnores([
+    "**/dist/**",
+    "**/dist-ssr/**",
+    "**/coverage/**",
+    "primitive/**",
+  ]),
 
   pluginVue.configs["flat/essential"],
   vueTsConfigs.recommendedTypeChecked,
@@ -27,11 +34,11 @@ export default defineConfigWithVueTs(
 
   // Generated model attribute files use the standard js-bao
   // class/interface declaration-merging idiom. The pattern is intentional
-  // and the files are generated from `models.toml`, so silence the generic
-  // warning for those files only.
+  // and the files are generated from `primitive/<env>/db3-types/` by
+  // `pnpm codegen`, so silence the generic warning for those files only.
   {
     name: "primitive-vue-template/generated-models",
-    files: ["src/models/*.generated.ts"],
+    files: ["src/models/**/*.generated.ts", "src/models/**/index.ts"],
     rules: {
       "@typescript-eslint/no-unsafe-declaration-merging": "off",
       "@typescript-eslint/prefer-as-const": "off",
@@ -52,8 +59,8 @@ export default defineConfigWithVueTs(
       "@typescript-eslint/no-redundant-type-constituents": "off",
     },
   },
-  // Platform deprecations. Every deprecated member of js-bao-wss-client,
-  // primitive-app and js-bao carries a `@deprecated` note in its typings, and
+  // Platform deprecations. Every deprecated member of js-bao-wss-client and
+  // js-bao carries a `@deprecated` note in its typings, and
   // this type-aware rule reports each use with that note, so `pnpm lint` lists
   // what the next major of the platform removes. Replace the use with what the
   // note names rather than suppressing the warning.

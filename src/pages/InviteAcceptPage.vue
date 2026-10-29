@@ -11,21 +11,20 @@
  * - Signed-in: call `client.invitations.accept(token)` and redirect.
  * - Signed-out: stash the token in sessionStorage and route through the
  *   normal login flow. The auth methods in `userStore` then thread the
- *   token through to magicLinkVerify / otpVerify / passkeyRegisterFinish
- *   / startOAuthFlow so the server resolves grants in one round-trip.
+ *   token through to the sign-in callback / otpVerify /
+ *   passkeyRegisterFinish / startOAuthFlow so the server resolves grants in
+ *   one round-trip.
  */
 import { AlertTriangle, Check, Mail } from "@lucide/vue";
-import type { Component } from "vue";
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   clearPendingInviteToken,
   isPlausibleInviteToken,
   setPendingInviteToken,
 } from "@/lib/inviteToken";
+import { getAppClient } from "@/lib/client";
 import { appBaseLogger } from "@/lib/logger";
-import { buildRouteOrUrl, resolveRouteOrUrl } from "@/lib/routeOrUrl";
-import { jsBaoClientService } from "primitive-app";
 import { useUserStore } from "@/stores/userStore";
 import { Button } from "@/components/ui/button";
 import PrimitiveLogoSpinner from "@/components/shared/PrimitiveLogoSpinner.vue";
@@ -40,21 +39,6 @@ type AcceptState =
   | "token-invalid"
   | "error";
 
-interface Props {
-  /** Absolute or path URL to send the user to after a successful accept. */
-  continueURL?: string;
-  /** Named route to send the user to after a successful accept. */
-  continueRoute?: string;
-  /** Absolute or path URL to the app's login page (for signed-out invitees). */
-  loginURL?: string;
-  /** Named login route (for signed-out invitees). */
-  loginRoute?: string;
-  /** Optional loading component shown while processing the token. */
-  loadingComponent?: Component;
-}
-
-const props = defineProps<Props>();
-
 const user = useUserStore();
 const router = useRouter();
 const route = useRoute();
@@ -65,15 +49,9 @@ const errorMessage = ref<string | null>(null);
 const grantsResolved = ref<{ groups: number; documents: number } | null>(null);
 const validatedToken = ref<string | null>(null);
 
-const continueHref = computed(() => {
-  const target = buildRouteOrUrl(props.continueURL, props.continueRoute);
-  return resolveRouteOrUrl(router, target);
-});
-
-const loginHref = computed(() => {
-  const target = buildRouteOrUrl(props.loginURL, props.loginRoute);
-  return resolveRouteOrUrl(router, target);
-});
+/** Where an accepted invitation continues, and where a signed-out invitee signs in. */
+const continueHref = router.resolve({ name: "home" }).href;
+const loginHref = router.resolve({ name: "login" }).href;
 
 /** Strip ?inviteToken from the URL bar so it doesn't linger in history. */
 function stripTokenFromUrl(): void {
@@ -87,13 +65,13 @@ function stripTokenFromUrl(): void {
 function continueToApp(): void {
   // Navigation is fire-and-forget: a blocked route resolves to a navigation
   // failure, and a guard that throws should surface as an unhandled rejection.
-  void router.push(continueHref.value);
+  void router.push(continueHref);
 }
 
 function goToLogin(): void {
   void router.push({
-    path: loginHref.value,
-    query: { continueURL: continueHref.value },
+    path: loginHref,
+    query: { continueURL: continueHref },
   });
 }
 
@@ -109,8 +87,8 @@ async function signOutAndRetry(): Promise<void> {
   }
   await user.logout();
   await router.push({
-    path: loginHref.value,
-    query: { continueURL: continueHref.value },
+    path: loginHref,
+    query: { continueURL: continueHref },
   });
 }
 
@@ -123,7 +101,7 @@ async function confirmAccept(): Promise<void> {
   }
   acceptState.value = "accepting";
   try {
-    const client = await jsBaoClientService.getClientAsync();
+    const client = await getAppClient();
     const result = await client.invitations.accept(token);
     flowLogger.debug("Invitation accepted", result);
     grantsResolved.value = result.grantsResolved;
@@ -188,9 +166,8 @@ onMounted(handle);
 </script>
 
 <template>
-  <component
+  <PrimitiveLogoSpinner
     v-if="acceptState === 'processing' || acceptState === 'accepting'"
-    :is="props.loadingComponent || PrimitiveLogoSpinner"
   />
 
   <!-- Signed out: invite recognised, prompt to sign in / sign up. -->

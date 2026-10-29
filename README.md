@@ -1,8 +1,8 @@
 # Primitive Template App
 
-A production-ready Vue starter built on the Primitive platform. Ships Vue 3 + TypeScript + Vite + Tailwind 4 + shadcn-vue + Pinia + vue-router, wired to the Primitive client libraries (`primitive-app`, `js-bao`, `js-bao-wss-client`) with auth, layouts, theming, and a Cloudflare Workers deploy already in place.
+A production-ready Vue starter built on the Primitive platform. Ships Vue 3 + TypeScript + Vite + Tailwind 4 + shadcn-vue + Pinia + vue-router, wired to the Primitive client (`js-bao-wss-client`, `js-bao`) with sign-in, onboarding, an app shell and a Cloudflare Workers deploy already in place. All of it is code in this app: change it like any other source.
 
-For platform concepts and API reference (auth flows, models, sharing, collections, workflows, prompts, integrations, etc.), see the **Primitive Docs**: https://primitive-labs.github.io/primitive-docs-site/ — or use the CLI (see below).
+For platform concepts and API reference (sign-in, databases, server functions, prompts, integrations, etc.), see the **Primitive Docs**: https://primitive-labs.github.io/primitive-docs-site/ — or use the CLI (see below).
 
 ## Install the Primitive CLI
 
@@ -26,10 +26,10 @@ primitive guides get <topic>    # fetch a specific guide
 ### 1. Create your app
 
 ```bash
-npx create-primitive-app my-app
+primitive init my-app --platform web
 ```
 
-This signs you in to your Primitive account, creates the app on the platform, scaffolds this template, and writes `.primitive/config.json` with a `dev` Primitive environment bound to the new app.
+This creates the app on the platform, scaffolds this template, writes `primitive/config.json` with a `dev` Primitive environment bound to the new app, and allows `http://localhost:5173` (CORS and the sign-in-link callback).
 
 ### 2. Run it
 
@@ -38,40 +38,37 @@ cd my-app
 pnpm dev
 ```
 
-Visit `http://localhost:5173`.
+Visit `http://localhost:5173` and sign in with the code from the email.
 
 ## What's Included
 
-### Auth — all four methods, prewired
-- Magic link, OTP, passkey (WebAuthn), and OAuth (Google) — all surfaced through `<PrimitiveLogin>` on `LoginPage.vue`
-- `<PrimitiveLogout>`, `<PrimitiveOauthCallback>` ready at `/logout` and `/oauth/callback`
-- `EditProfile.vue` and `PasskeyManagement.vue` for in-app account management
+### Sign-in
+- One email carries a 6-digit code and a sign-in link; passkeys (WebAuthn, with conditional UI) and Google sign-in — all on `LoginPage.vue` (`PrimitiveLogin.vue`)
+- `/oauth/callback` (`PrimitiveSignInCallback.vue`): the page an emailed link or the Google redirect opens; an expired link offers a resend to the same address, from any tab
+- The client chooses the link's target and parses the callback (`emailSignInLinkTarget()`, `handleSignInCallback()`); `src/lib/signInState.ts` adds where to continue
+- `/onboarding` (`PrimitiveOnboarding.vue`): a new user's name (required) and photo, then the passkey prompt where the app offers passkeys
+- `EditProfile.vue` (name, avatar) and `PasskeyManagement.vue` from the user menu; `/logout`
+- The route guard (`src/router/primitiveRouter.ts`): `requireSignIn` per route, plus an optional `authCheck` with `isAdmin` and `hasRole`
 
-### Tokenized invite flow
-- `/invite/accept` page (`InviteAcceptPage.vue`) handles platform-issued invitation links
-- Signed-in invitees are accepted in one round-trip; signed-out invitees have the token stashed in sessionStorage (`src/lib/inviteToken.ts`) and threaded through magic-link / OTP / passkey / OAuth flows by `userStore`
+### Invitations
+- `/invite/accept` (`InviteAcceptPage.vue`) handles platform-issued invitation links
+- Signed-in invitees accept in one step; signed-out invitees have the token stashed in sessionStorage (`src/lib/inviteToken.ts`) and carried through every sign-in method by `userStore`
 
 ### Layout & chrome
 - `AppLayout.vue` — collapsible sidebar (`AppSidebar.vue`) + content area for signed-in routes
 - `LoginLayout.vue` — split layout for auth pages (login form + marketing carousel)
 - `PrimitiveUserMenu`, `PrimitiveMobileTabBar`, `PrimitiveLoadingGate`, `PrimitiveLogoSpinner`, `DeleteConfirmationDialog` shared components
-- Light/dark theme via `useTheme` composable
 
 ### UI kit
-- Full shadcn-vue install under `src/components/ui/`: avatar, badge, button, card, carousel, checkbox, dialog, dropdown-menu, input, label, select, separator, sheet, sidebar, skeleton, table, textarea, tooltip
-- Tailwind 4 with `tw-animate-css`
+- shadcn-vue components under `src/components/ui/`: avatar, button, card, carousel, dialog, dropdown-menu, input, label, separator, sheet, sidebar, skeleton, tooltip (add more with `pnpm dlx shadcn-vue@latest add <name>`)
+- Tailwind 4 with `tw-animate-css`; the design tokens are in `src/style.css`
 
-### Data layer
-- `js-bao` v2 codegen wired up — edit the schema `pnpm codegen` reads (`src/models/models.toml` here), run `pnpm codegen`, import from `@/models`
-- `UserPref` ships as an example model and powers user-prefs storage in `userStore`
-- `useJsBaoDataLoader` composable: debounced query + auto-resubscribe on model changes
+### Data
+- No data model ships: declare a db3 type in `primitive/<env>/db3-types/` and `pnpm codegen` generates its models (see [Adding a Database Type](#adding-a-database-type))
+- `useJsBaoDataLoader` composable: loads a view's data and reloads on model changes and when a db3 becomes ready, gone or evicted
 
-### Test harness
-- `primitiveDevTools` plugin registered in `vite.config.ts`
-- Tests live in `src/tests/*.primitive-test.ts`
-- Open the runner in dev with **Cmd+Shift+L** (configurable in `vite.config.ts`)
-- The same tests also run headlessly for CI via `pnpm test` — see
-  [Running harness tests headlessly (CI)](#running-harness-tests-headlessly-ci)
+### Tests
+- `pnpm test` runs vitest in Node, signed in as your test account (`src/tests/support/signIn.ts`); `src/tests/example.spec.ts` is the starting point — see [Tests](#tests)
 
 ### Deploy
 - Cloudflare Workers via `wrangler.toml` + `worker.js` + `scripts/deploy.mjs`
@@ -80,35 +77,55 @@ Visit `http://localhost:5173`.
 ## Project Structure
 
 ```
+primitive/
+└── dev/db3-types/  Your db3 type files (one per type)
 src/
 ├── assets/         Static images
 ├── components/
-│   ├── auth/       Login / logout / OAuth callback / profile / passkeys
+│   ├── auth/       Login / logout / sign-in callback / onboarding / profile / passkeys
 │   ├── shared/     User menu, loading gate, mobile tab bar, etc.
 │   ├── ui/         shadcn-vue components
 │   └── AppSidebar.vue
-├── composables/    useJsBaoDataLoader, useTheme
-├── config/         envConfig.ts — read VITE_* vars
+├── composables/    useJsBaoDataLoader
+├── config/         envConfig.ts — environment config and the client options
 ├── layouts/        AppLayout, LoginLayout
-├── lib/            inviteToken, logger, routeOrUrl, utils
-├── models/         models.toml (unless the app's schema is shared above this client) + *.generated.ts + barrel index.ts
+├── lib/            client, signInState, inviteToken, logger, routeOrUrl, utils
+├── models/         Generated by `pnpm codegen`: index.ts (allModels) + one directory per db3 type
 ├── pages/          HomePage, LoginPage, InviteAcceptPage, NotFoundPage
 ├── router/         routes.ts (createPrimitiveRouter), primitiveRouter.ts
-├── stores/         userStore (auth + user prefs)
-├── tests/          *.primitive-test.ts (registered with the test harness)
+├── stores/         userStore (sign-in, profile, passkeys)
+├── tests/          example.spec.ts + support/signIn.ts
 └── main.ts
 ```
 
 `worker.js` is library-provided — **do not edit**.
 
-## Adding a Model
+## Adding a Database Type
 
-1. Add a `[models.<name>]` section to the schema the `codegen` script names with `-i` — `src/models/models.toml` here, or a shared `models/models.toml` above this directory when this client is one of several against one Primitive app. There is one schema per app, never a copy: its TOML keys are the wire field names.
-2. Run `pnpm codegen` to regenerate the `*.generated.ts` files.
-3. Register the new class in `src/models/index.ts` (the barrel uses `attachAndRegisterModel` to bind each class to its TOML schema).
-4. Import from `@/models` anywhere — the barrel registers all models as a side effect on first import.
+1. Declare the type in `primitive/<env>/db3-types/<type>.toml` (beside `primitive/config.json`):
 
-For TOML field options, types, and codegen conventions: `primitive guides get models` (or browse `primitive guides list`).
+   ```toml
+   [type]
+   name = "notes"
+
+   [models.notes]
+   class_name = "Note"
+
+   [models.notes.fields.id]
+   type = "id"
+   auto_assign = true
+   indexed = true
+   required = true
+
+   [models.notes.fields.title]
+   type = "string"
+   ```
+
+2. `primitive config push` to create the type on the platform.
+3. `pnpm codegen` generates `src/models/notes/` and adds its models to `allModels` in `src/models/index.ts`, which the client is initialized with.
+4. Import the models from `@/models/notes` and read them in a view with `useJsBaoDataLoader`.
+
+Generated files are committed; never edit them. For field options, records and access: `primitive guides get databases`.
 
 ## Available Scripts
 
@@ -117,9 +134,9 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm dev` | Run codegen, then start the Vite dev server |
 | `pnpm build` | Run codegen, type-check, and build for production |
 | `pnpm build-only` | Vite build only (skips type-check) |
-| `pnpm test` | Run codegen, then run the registered harness tests headlessly under vitest |
+| `pnpm test` | Run codegen, then the `src/tests/` specs under vitest, signed in as `PRIMITIVE_TEST_EMAIL` |
 | `pnpm preview` | Serve the production build locally |
-| `pnpm codegen` | Regenerate `*.generated.ts` from `models.toml` |
+| `pnpm codegen` | Regenerate the models from `primitive/<env>/db3-types/` and the function invokers from `functions/` |
 | `pnpm type-check` | `vue-tsc --build` |
 | `pnpm lint` | ESLint with `--fix --cache`, using the type-aware `recommendedTypeChecked` preset (unhandled promises, `async` without `await`, redundant assertions); findings are fixed in source, not suppressed. Also warns on every use of a deprecated platform API |
 | `pnpm format` / `pnpm format:check` | Prettier write / check |
@@ -128,39 +145,42 @@ For TOML field options, types, and codegen conventions: `primitive guides get mo
 | `pnpm child:down <slug> [--skip-teardown]` | Run `scripts/child-app-teardown`, then delete the child app |
 | `pnpm clean` / `pnpm clean-modules` | Remove `dist/` / `node_modules` + lockfile |
 
-## Running Harness Tests Headlessly (CI)
+## Tests
 
-`pnpm test` runs every registered `src/tests/*.primitive-test.ts` group under
-vitest in Node — the exact same groups the in-browser Test Harness panel
-(Cmd+Shift+L) runs — so registered tests can gate merges in CI. No browser or
-headless-browser stack is involved: the js-bao client drives the full
-document/model lifecycle natively in Node.
+`pnpm test` runs the `.spec.ts` files under `src/tests/` with vitest in Node,
+against the app's Primitive server. `signIn()` from `src/tests/support/signIn.ts`
+signs in your test account and returns a client:
 
-### Prerequisites
+```ts
+const { client, email } = await signIn();
+const profile = await client.me.get();
+await signOut(client);
+```
 
-1. **Whitelist a test sign-in email for your app.** The headless run signs in
-   through the OTP test bypass (code `000000`), which only works for emails
-   whose base address the app owner has whitelisted:
+### One-time setup
 
-   ```bash
-   primitive apps update <your-app-id> --test-account-bases "you@yourdomain.com"
-   ```
+The test account signs in with the fixed code `000000`, which works only for a
+`+primitivetest` address whose base your app lists in `testAccountBaseEmails`.
+Add your base address to `primitive/<env>/app.toml`:
 
-   Then any `you+primitivetest-<suffix>@yourdomain.com` address signs in with
-   code `000000` and auto-provisions a test user — the bare base address
-   (`you@yourdomain.com`) is never a test account and always fails sign-in.
-   Use a **stable suffix** per CI project (e.g.
-   `you+primitivetest-ci@yourdomain.com`) so runs reuse one test user instead
-   of creating new ones.
+```toml
+[app]
+testAccountBaseEmails = ["you@yourdomain.com"]
+```
 
-2. **`ws`** must be installed (it is a devDependency of this template) — the
-   js-bao client needs it for WebSockets in Node.
+then `primitive config push`. Any `you+primitivetest-<suffix>@yourdomain.com`
+now signs in with `000000` (no email is sent) and is provisioned on first
+sign-in; the bare base address is never a test account. Use a stable suffix per
+machine or CI project so runs reuse one test user. An invite-only app admits
+the address only once it is invited: `primitive users invite <app-id> <address>`.
 
 ### Running
 
 ```bash
 PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test
 ```
+
+Without `PRIMITIVE_TEST_EMAIL` the run fails, naming the variable.
 
 To run against another environment, pass vitest's `--mode` and keep a matching
 `.env.<mode>` file — **without a `--` separator**:
@@ -182,40 +202,22 @@ For CI systems that consume JUnit output:
 PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-results.xml
 ```
 
-### Notes
+### Gotchas
 
 - The app ID and server URLs come from the selected Primitive environment in
-  `.primitive/config.json`, filled in by the `primitiveEnv()` plugin and read
-  through `import.meta.env` in `src/tests/primitive-tests.spec.ts`. Point a
-  run at a different backend with `primitive env use <name>` or
+  `primitive/config.json`, through the `primitiveEnv()` plugin. Point a run at
+  a different backend with `primitive env use <name>` or
   `PRIMITIVE_ENV=<name> pnpm test`; vitest `--mode` selects the `.env.<mode>`
-  file for app behavior only.
-- Because the two are independent, `PRIMITIVE_ENV=dev pnpm test --mode alpha`
-  is a run against `dev` with alpha's app behavior — and it signs in and writes
-  data there. If a mode's keys only make sense against one backend, declare
-  `VITE_EXPECTED_PRIMITIVE_ENV` in its `.env.<mode>` (see
-  [Pinning a mode to a Primitive environment](#pinning-a-mode-to-a-primitive-environment))
-  and a mismatched run stops at config time, before sign-in.
-- Tests that return a score (`"passed/total (pct%)"`) fail the run when below
-  a full score, so parity-style suites actually gate CI. The browser panel
-  shows the same result as "scored" without failing.
-- Invite-only, domain-restricted, and waitlist apps reject test-account
-  provisioning like any other signup — the run fails with a clear auth error.
-- The bypass token lives ~30 minutes. If a single suite runs longer, split it
-  or re-run per shard.
-- A test file that fails to load (import error, wrong default export) surfaces
-  as a failing test — never a silent skip.
-- A test that needs browser APIs (canvas, MediaRecorder, …) should declare
-  `environment: "browser"` on the test — or on the whole `TestGroup` — so the
-  headless run reports it as skipped instead of failing. Node-only tests can
-  symmetrically declare `environment: "node"` and the browser panel skips
-  them. Tests without the flag run in both contexts.
+  file for app behavior only. If a mode's keys only make sense against one
+  backend, declare `VITE_EXPECTED_PRIMITIVE_ENV` in its `.env.<mode>` (see
+  [Pinning a mode to a Primitive environment](#pinning-a-mode-to-a-primitive-environment)).
+- The test session lives about 30 minutes; split a longer suite.
 
 ## Configuration
 
 Two files, two different jobs.
 
-### Identity: `.primitive/config.json`
+### Identity: `primitive/config.json`
 
 The backend URL and app ID are typed **once**, here. `primitive init` writes
 it; every `primitive` command reads it; and the `primitiveEnv()` Vite plugin
@@ -337,7 +339,7 @@ apps") for the rest of the workflow.
 cd my-app
 git init
 git add .
-git commit -m "Initial commit from primitive-app template"
+git commit -m "Initial commit from the Primitive template"
 ```
 
 Then create a repo on GitHub (without README/.gitignore/license) and:
@@ -347,6 +349,24 @@ git remote add origin https://github.com/your-username/my-app.git
 git branch -M main
 git push -u origin main
 ```
+
+## Sign-In Methods
+
+`primitive init` leaves a new app ready for email sign-in from
+`http://localhost:5173`: the email carries a code, and a link to
+`/oauth/callback` because init put that URL in the app's
+`[auth].emailRedirectUris`. Everything else is a setting in
+`primitive/<env>/app.toml`, then `primitive config push`:
+
+- **Email links on another origin** (a deployed site, another port): add that
+  origin's `/oauth/callback` to `[auth].emailRedirectUris` and the origin to
+  `[cors].allowedOrigins`. A link target missing from a non-empty list is
+  refused; with the list empty the email carries the code alone.
+- **Passkeys**: `passkeyEnabled = true` under `[auth]` and a relying-party
+  entry for your domain in `[auth.passkeys]` (`primitive guides get
+  authentication`). The login form then offers passkeys, onboarding asks new
+  users to add one, and the user menu shows Manage Passkeys.
+- **Google**: below.
 
 ## Setting Up Google Sign-In
 
@@ -431,9 +451,13 @@ deleting those lines is the whole migration.)
 
 ### 4. Register the production URL with Primitive
 
+In `primitive/<env>/app.toml` for the Primitive environment you deploy
+against, add the production origin to `[cors].allowedOrigins` and its
+`/oauth/callback` to `[auth].emailRedirectUris` (and to the Google client's
+redirect URIs if you use Google), then push:
+
 ```bash
-primitive apps origins add https://my-app-prod.your-subdomain.workers.dev
-# and update Google OAuth callback URL if applicable
+primitive config push --env prod
 ```
 
 ### 5. Deploy

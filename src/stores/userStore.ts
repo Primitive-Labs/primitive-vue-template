@@ -1,13 +1,18 @@
 /**
  * @module userStore
  *
- * Pinia store for managing user authentication state and preferences.
+ * Pinia store for the signed-in user.
  *
  * The `useUserStore` provides reactive access to:
  * - Current user profile and authentication status
  * - Network connectivity status
- * - Authentication configuration (OAuth, passkey, magic link availability)
- * - User preferences (key-value storage synced to the root document)
+ * - Authentication configuration (OAuth, passkey, email sign-in availability)
+ * - Every sign-in method, the sign-in callback, profile and avatar, passkeys
+ *
+ * The client owns the sign-in rules: where an emailed link lands
+ * (`emailSignInLinkTarget()`) and which URLs are callbacks
+ * (`handleSignInCallback()`). The store adds the app's continuation bag
+ * (`src/lib/signInState.ts`) and its state.
  */
 import type {
   JsBaoEvents,
@@ -21,14 +26,13 @@ import {
 } from "js-bao-wss-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { useTheme } from "../composables/useTheme";
+import { getAppClient } from "../lib/client";
 import {
   clearPendingInviteToken,
   getPendingInviteToken,
 } from "../lib/inviteToken";
 import { appBaseLogger } from "../lib/logger";
-import { UserPref } from "../models";
-import { jsBaoClientService } from "primitive-app";
+import { emailSignInRedirect, readStateBag } from "../lib/signInState";
 export { AUTH_CODES, AuthError } from "js-bao-wss-client";
 export type { UserProfile } from "js-bao-wss-client";
 
@@ -61,36 +65,38 @@ export interface AuthConfig {
 }
 
 /**
- * Result from requesting a magic link.
+ * Result from requesting a sign-in email.
  */
-export interface MagicLinkRequestResult {
+export interface EmailSignInRequestResult {
   ok: boolean;
 }
 
 /**
- * Result from verifying a magic link.
+ * What `handleSignInCallback()` reports to the callback page: where to
+ * continue and the onboarding hints, or why the link did not sign anyone in.
  */
-export interface MagicLinkVerifyResult {
-  ok: boolean;
-  /** User profile after successful verification */
-  user?: {
-    userId: string;
-    email: string;
-    name?: string;
-  };
-  /** True if user should be prompted to add a passkey */
-  promptAddPasskey?: boolean;
-  /** True if this is a newly created user (first sign-in) */
-  isNewUser?: boolean;
-  /** URL to redirect to after verification */
-  redirectTo: string;
-  /** Auth error code if verification failed */
-  errorCode?: string;
-  /** Error message for display or fallback detection */
-  errorMessage?: string;
-  /** True if the magic link token was expired or already used */
-  tokenExpiredOrUsed?: boolean;
-}
+export type SignInCallbackOutcome =
+  | {
+      ok: true;
+      /** Where to continue after onboarding: the link's bag, else "/". */
+      continueUrl: string;
+      /** True if this is a newly created user (first sign-in). */
+      isNewUser: boolean;
+      /** True if the server suggests adding a passkey. */
+      promptAddPasskey: boolean;
+    }
+  | {
+      ok: false;
+      /** The auth error code, when the failure carried one. */
+      errorCode?: string;
+      errorMessage: string;
+      /** True if the link had expired or was already used. */
+      tokenExpiredOrUsed: boolean;
+      /** The address the link was sent to, for a resend; from the link's bag. */
+      email?: string;
+      /** Where the link would have continued; from the link's bag, else "/". */
+      continueUrl: string;
+    };
 
 /**
  * Information about a registered passkey.
@@ -121,53 +127,19 @@ export interface OtpVerifyResult {
 
 type AuthFailedPayload = JsBaoEvents["auth-failed"];
 
-type UserPrefsMap = Record<string, unknown>;
-
-/** What handleOAuthCallback reads from the base64-JSON `state` URL param. */
-interface OAuthCallbackState {
-  continueUrl?: string;
-  email?: string;
-  inviteToken?: string;
-}
-
-/**
- * Narrow a parsed `state` param to the fields the callback uses. Anything that
- * is not an object, and any field that is not a string, reads as absent, so a
- * malformed state falls through to the defaults.
- */
-function readOAuthCallbackState(parsed: unknown): OAuthCallbackState {
-  if (typeof parsed !== "object" || parsed === null) return {};
-  const fields = parsed as Record<string, unknown>;
-  const text = (key: keyof OAuthCallbackState) =>
-    typeof fields[key] === "string" ? fields[key] : undefined;
-  return {
-    continueUrl: text("continueUrl"),
-    email: text("email"),
-    inviteToken: text("inviteToken"),
-  };
-}
-
 // Module-scoped lifecycle flags and resources
 let initStarted = false;
 let removeStatusListener: (() => void) | null = null;
 let removeAuthSuccess: (() => void) | null = null;
 let removeAuthFailed: (() => void) | null = null;
-let rootDocOpen = false;
-let rootDocumentId: string | null = null;
-let prefsUnsubscribe: (() => void) | null = null;
 // De-duplicates concurrent loadAuthConfig() calls. Lazily fetched on first
 // access so we don't pay the round trip on cold loads where the user is
 // already authenticated and never sees the login UI.
 let authConfigPromise: Promise<void> | null = null;
-// Resolves after the initial prefs load (root doc opened + UserPref.query
-// completed). getPref/setPref/etc. await this so callers see consistent state
-// even when prefs are loaded in the background. Reset on logout.
-let prefsReadyPromise: Promise<void> | null = null;
-// Ensures completeAuthentication() runs exactly once per login. The auth-success
-// event can fire synchronously during magicLinkVerify/handleOAuthCallback,
-// starting a concurrent call that races the explicit one. The guard serialises
-// them so that (1) authentication fully completes before the root document is
-// opened and (2) isAuthenticated is not set until prefs are loaded.
+// Ensures completeAuthentication() runs exactly once per login. The
+// auth-success event can fire synchronously during a verify or a callback,
+// starting a concurrent call that races the explicit one; the guard
+// serialises them so isAuthenticated is set once the profile is loaded.
 let completeAuthPromise: Promise<void> | null = null;
 
 export const useUserStore = defineStore("user", () => {
@@ -183,7 +155,7 @@ export const useUserStore = defineStore("user", () => {
    *
    * This is a live reactive signal, not a one-time gate — it can transition
    * in both directions at any time after initialization:
-   * - `false → true`: returning user during initialize(), OAuth callback, magic link, passkey
+   * - `false → true`: returning user during initialize(), sign-in callback, code, passkey
    * - `true → false`: session expiry (auth-failed event), explicit logout
    *
    * Components inside AppLayout can assume this is true (the layout gates on it).
@@ -210,7 +182,7 @@ export const useUserStore = defineStore("user", () => {
 
   /**
    * Authentication configuration from the server.
-   * Indicates which auth methods (OAuth, passkey, magic link) are available.
+   * Indicates which auth methods (OAuth, passkey, email sign-in) are available.
    */
   const authConfig = ref<AuthConfig | null>(null);
 
@@ -225,8 +197,6 @@ export const useUserStore = defineStore("user", () => {
    */
   const authConfigError = ref<string | null>(null);
 
-  const userPrefs = ref<UserPrefsMap>({});
-
   /**
    * Whether the current user has admin privileges.
    */
@@ -234,92 +204,12 @@ export const useUserStore = defineStore("user", () => {
     Boolean(isAuthenticated.value && currentUser.value?.appRole === "admin")
   );
 
-  /**
-   * Cached group memberships for the current user, indexed by groupType.
-   *
-   * Loading is non-blocking — `onAuthentication()` kicks it off but
-   * doesn't await it, so sign-in completes without an extra round-trip.
-   * The router awaits `whenMembershipsReady()` only when a route has an
-   * `authCheck` that may consult memberships. Routes without `authCheck`
-   * never pay the cost.
-   *
-   * The platform does not currently emit a membership-change event, so
-   * code that mutates the current user's group membership should call
-   * `refreshGroupMemberships()` after the change.
-   */
-  const groupMemberships = ref<Map<string, Set<string>>>(new Map());
-  const isMembershipsReady = ref(false);
-  let membershipsPromise: Promise<void> | null = null;
-
-  function isMemberOf(groupType: string, groupId: string): boolean {
-    return groupMemberships.value.get(groupType)?.has(groupId) ?? false;
-  }
-
-  function memberGroups(groupType: string): readonly string[] {
-    const set = groupMemberships.value.get(groupType);
-    return set ? Array.from(set) : [];
-  }
-
-  async function refreshGroupMemberships(): Promise<void> {
-    const refreshLogger = logger.forScope("refreshGroupMemberships");
-    if (!currentUser.value) {
-      groupMemberships.value = new Map();
-      isMembershipsReady.value = false;
-      membershipsPromise = null;
-      return;
-    }
-    const run = (async () => {
-      try {
-        const client = await jsBaoClientService.getClientAsync();
-        const memberships = await client.groups.listUserMemberships(
-          currentUser.value!.userId
-        );
-        const next = new Map<string, Set<string>>();
-        for (const m of memberships) {
-          let bucket = next.get(m.groupType);
-          if (!bucket) {
-            bucket = new Set();
-            next.set(m.groupType, bucket);
-          }
-          bucket.add(m.groupId);
-        }
-        groupMemberships.value = next;
-        refreshLogger.debug("Loaded memberships", {
-          groupTypes: next.size,
-          total: memberships.length,
-        });
-      } catch (err) {
-        refreshLogger.warn("Failed to load group memberships", err);
-      } finally {
-        isMembershipsReady.value = true;
-      }
-    })();
-    membershipsPromise = run;
-    await run;
-  }
-
-  /**
-   * Resolves once the current user's group memberships have been loaded
-   * at least once. Used by the router guard to defer `authCheck`
-   * evaluation if a navigation happens before the initial load finishes.
-   * Routes without an `authCheck` should not call this.
-   */
-  async function whenMembershipsReady(): Promise<void> {
-    if (isMembershipsReady.value) return;
-    if (membershipsPromise) {
-      await membershipsPromise;
-      return;
-    }
-    await refreshGroupMemberships();
-  }
-
   // ---------------------------------------------------------------------------
   // Initialization
   // ---------------------------------------------------------------------------
 
   /**
-   * Initialize the user store.
-   * This is typically called by `createPrimitiveApp` during app bootstrap.
+   * Initialize the user store. `main.ts` calls it once during bootstrap.
    *
    * Apps should watch `isAuthenticated` to handle sign-out events and redirect
    * to login as needed.
@@ -335,7 +225,7 @@ export const useUserStore = defineStore("user", () => {
     // Initialize Auth and UserProfile
     try {
       initLogger.debug("Initialization started");
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
 
       // Auth config is loaded lazily on first read via loadAuthConfig().
       // Pages that render the login UI call it explicitly; passive
@@ -385,7 +275,6 @@ export const useUserStore = defineStore("user", () => {
         initLogger.debug("Event Received: auth-failed:", message);
         isAuthenticated.value = false;
         currentUser.value = null;
-        cleanupPrefs();
         try {
           await client.logout({ clearOfflineIdentity: true });
         } catch {}
@@ -427,7 +316,7 @@ export const useUserStore = defineStore("user", () => {
     authConfigError.value = null;
     authConfigPromise = (async () => {
       try {
-        const client = await jsBaoClientService.getClientAsync();
+        const client = await getAppClient();
         const config = await client.getAuthConfig();
         authConfig.value = {
           appId: config.appId,
@@ -464,177 +353,45 @@ export const useUserStore = defineStore("user", () => {
    * @throws Error if OAuth is not available
    */
   const login = async (continueURL?: string): Promise<void> => {
-    const client = await jsBaoClientService.getClientAsync();
+    const client = await getAppClient();
     const googleAvailable = await client.checkOAuthAvailable();
     if (!googleAvailable) throw new Error("OAuth is not available");
     const inviteToken = getPendingInviteToken() ?? undefined;
     await client.startOAuthFlow(continueURL, { inviteToken });
   };
 
+  // ---------------------------------------------------------------------------
+  // Email sign-in and the sign-in callback
+  // ---------------------------------------------------------------------------
+
   /**
-   * Handle the OAuth or magic link callback after the user returns.
-   * This should be called from your callback route.
-   * Automatically detects whether this is an OAuth callback (code+state) or
-   * magic link callback (magic_token).
+   * Request ONE email sign-in email: it carries a 6-digit code and, when the
+   * client has a link target the app allow-lists, a sign-in link. The user
+   * finishes with either.
    *
-   * @param defaultContinueUrl - URL to redirect to if no continue URL was in state
-   * @param loginUrl - URL to redirect to on authentication failure
-   * @returns Object with callback result including redirect URL and prompt flags
-   */
-  const handleOAuthCallback = async (
-    defaultContinueUrl: string,
-    loginUrl: string
-  ): Promise<{
-    ok: boolean;
-    redirectTo: string;
-    /** True if user was added to waitlist */
-    waitlisted?: boolean;
-    /** True if user should be prompted to add a passkey */
-    promptAddPasskey?: boolean;
-    /** True if this is a newly created user (first sign-in) */
-    isNewUser?: boolean;
-    /** Auth error code if applicable */
-    errorCode?: string;
-    /** Error message for display or fallback detection */
-    errorMessage?: string;
-    /** True if magic link token was expired or already used */
-    tokenExpiredOrUsed?: boolean;
-    /** Email from the original magic link request (for auto-resend) */
-    email?: string;
-  }> => {
-    const callbackLogger = logger.forScope("handleOAuthCallback");
-    callbackLogger.debug("Begin", {
-      href: typeof window !== "undefined" ? window.location.href : "",
-    });
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get("code");
-    const state = urlParams.get("state");
-    const magicToken = urlParams.get("magic_token");
-
-    callbackLogger.debug("URL params", {
-      code: code ? "present" : "missing",
-      state: state ? "present" : "missing",
-      magicToken: magicToken ? "present" : "missing",
-    });
-
-    // Parse state once - used by both magic link and OAuth flows
-    let redirectTo = defaultContinueUrl;
-    let emailFromState: string | undefined;
-
-    if (state) {
-      try {
-        const stateObj = readOAuthCallbackState(JSON.parse(atob(state)));
-        if (stateObj.continueUrl) {
-          redirectTo = stateObj.continueUrl;
-        }
-        if (stateObj.email) {
-          emailFromState = stateObj.email;
-        }
-        // The magic link may have been opened in a different tab/browser, in
-        // which case sessionStorage is empty. Restore the inviteToken from
-        // state so the verify call can thread it through to the server.
-        if (stateObj.inviteToken && !getPendingInviteToken()) {
-          sessionStorage.setItem(
-            "primitive:pendingInviteToken",
-            stateObj.inviteToken
-          );
-        }
-        callbackLogger.debug("Parsed state", stateObj);
-      } catch (e: unknown) {
-        callbackLogger.warn("Failed to parse state; using defaults", e);
-      }
-    }
-
-    // Magic link callback
-    if (magicToken) {
-      callbackLogger.debug("Detected magic link callback");
-      const result = await handleMagicLinkCallback(magicToken);
-
-      if (!result.ok) {
-        return {
-          ok: false,
-          // Always preserve the continue URL - never redirect to login after
-          // a successful auth. The callback component handles "back to login"
-          // navigation separately via goToLogin().
-          redirectTo,
-          errorCode: result.errorCode,
-          errorMessage: result.errorMessage,
-          tokenExpiredOrUsed: result.tokenExpiredOrUsed,
-          email: emailFromState,
-        };
-      }
-
-      return {
-        ok: true,
-        redirectTo,
-        promptAddPasskey: result.promptAddPasskey,
-        isNewUser: result.isNewUser,
-      };
-    }
-
-    // OAuth callback - validate required params
-    if (!code || !state) {
-      const reason = !code ? "missing OAuth code" : "missing OAuth state";
-      callbackLogger.error(`OAuth callback error: ${reason}`);
-      return {
-        ok: false,
-        redirectTo: `${loginUrl}?error=${encodeURIComponent(
-          "Authentication failed: invalid callback parameters"
-        )}`,
-      };
-    }
-
-    try {
-      const client = await jsBaoClientService.getClientAsync();
-      callbackLogger.debug("Invoking client.handleOAuthCallback...");
-      await client.handleOAuthCallback(code, state);
-      const authed = client.isAuthenticated();
-      callbackLogger.debug("handleOAuthCallback complete", {
-        isAuthenticated: authed,
-      });
-      if (authed) {
-        await completeAuthentication();
-      }
-      return { ok: true, redirectTo };
-    } catch (err: unknown) {
-      callbackLogger.error("Error during callback", err);
-      const errorCode = err instanceof AuthError ? err.code : undefined;
-      const message =
-        err instanceof Error ? err.message : "Authentication failed";
-      return {
-        ok: false,
-        redirectTo: `${loginUrl}?error=${encodeURIComponent(message)}`,
-        errorCode,
-        waitlisted: errorCode === AUTH_CODES.ADDED_TO_WAITLIST,
-      };
-    }
-  };
-
-  // ---------------------------------------------------------------------------
-  // Magic Link Authentication
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Request ONE email sign-in email (#2884): it carries a 6-digit code and,
-   * when `redirectUri` is supplied and the app allow-lists it, a sign-in
-   * link. The user finishes with either.
+   * The link target is the client's (`emailSignInLinkTarget()`); the store
+   * adds the app's continuation bag to it — where to continue, the address
+   * (for a resend from another tab) and a pending invite token. With no
+   * target the email carries the code alone.
    *
    * @param email - Email address to sign in
-   * @param redirectUri - Where the link should land; without a usable one the
-   *   email carries the code alone
-   * @returns Result indicating success
-   * @throws AuthError if request fails (e.g., INVITATION_REQUIRED, DOMAIN_NOT_ALLOWED)
+   * @param bag - Where to continue after sign-in
+   * @throws AuthError if the request fails (e.g. INVITATION_REQUIRED, DOMAIN_NOT_ALLOWED)
    */
   const requestEmailSignIn = async (
     email: string,
-    redirectUri?: string
-  ): Promise<MagicLinkRequestResult> => {
+    bag: { continueUrl?: string } = {}
+  ): Promise<EmailSignInRequestResult> => {
     const emailLogger = logger.forScope("requestEmailSignIn");
     emailLogger.debug("Requesting email sign-in for:", email);
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
+      const redirectUri = emailSignInRedirect(client.emailSignInLinkTarget(), {
+        continueUrl: bag.continueUrl ?? "/",
+        email,
+        inviteToken: getPendingInviteToken() ?? undefined,
+      });
       await client.emailSignInRequest(email, { redirectUri });
       emailLogger.debug("Email sign-in request successful");
       return { ok: true };
@@ -645,27 +402,22 @@ export const useUserStore = defineStore("user", () => {
   };
 
   /**
-   * Handle the magic link callback by verifying the token.
-   * Called internally by handleOAuthCallback when magic_token is detected.
-   *
-   * @param token - The magic link token from the URL
-   * @returns Result with user info and prompt flags
+   * Finish a sign-in from the page an emailed link or an OAuth redirect
+   * opened. The client applies the callback grammar and signs the user in;
+   * this reports where to continue, or why the link did not sign anyone in.
    */
-  const handleMagicLinkCallback = async (
-    token: string
-  ): Promise<MagicLinkVerifyResult> => {
-    const magicLogger = logger.forScope("handleMagicLinkCallback");
-    magicLogger.debug("Verifying magic link token");
+  const handleSignInCallback = async (): Promise<SignInCallbackOutcome> => {
+    const callbackLogger = logger.forScope("handleSignInCallback");
+    const inviteToken = getPendingInviteToken() ?? undefined;
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
-      const inviteToken = getPendingInviteToken() ?? undefined;
-      const result = await client.magicLinkVerify(token, { inviteToken });
+      const client = await getAppClient();
+      const result = await client.handleSignInCallback(undefined, {
+        inviteToken,
+      });
       if (inviteToken) clearPendingInviteToken();
-
-      magicLogger.debug("Magic link verified successfully", {
-        userId: result.user.userId,
-        promptAddPasskey: result.promptAddPasskey,
+      callbackLogger.debug("Signed in", {
+        method: result.method,
         isNewUser: result.isNewUser,
       });
 
@@ -673,69 +425,33 @@ export const useUserStore = defineStore("user", () => {
 
       return {
         ok: true,
-        user: result.user,
-        promptAddPasskey: result.promptAddPasskey,
-        isNewUser: result.isNewUser,
-        redirectTo: "/",
+        continueUrl: result.continueUrl ?? "/",
+        isNewUser: result.isNewUser ?? false,
+        promptAddPasskey: result.promptAddPasskey ?? false,
       };
     } catch (err: unknown) {
-      magicLogger.error("Magic link verification failed:", err);
-
-      // Check for specific error codes
+      callbackLogger.error("Sign-in callback failed:", err);
       const errorCode = err instanceof AuthError ? err.code : undefined;
-      const errorMessage = err instanceof Error ? err.message : "";
-
-      magicLogger.debug("Error details:", {
-        isAuthError: err instanceof AuthError,
-        code: errorCode,
-        message: errorMessage,
-      });
-
-      // Check for access control errors (these are handled specially by the callback)
-      if (
-        errorCode === AUTH_CODES.ADDED_TO_WAITLIST ||
-        errorCode === AUTH_CODES.INVITATION_REQUIRED ||
-        errorCode === AUTH_CODES.DOMAIN_NOT_ALLOWED
-      ) {
-        return {
-          ok: false,
-          redirectTo: "/",
-          errorCode,
-          errorMessage,
-        };
-      }
-
-      // Detect token errors by code or by message content
-      const isTokenErrorByCode =
+      const errorMessage =
+        err instanceof Error ? err.message : "Authentication failed";
+      const message = errorMessage.toLowerCase();
+      const tokenExpiredOrUsed =
         errorCode === AUTH_CODES.TOKEN_EXPIRED ||
-        errorCode === AUTH_CODES.INVALID_TOKEN;
-      const isTokenErrorByMessage =
-        errorMessage.toLowerCase().includes("expired") ||
-        errorMessage.toLowerCase().includes("invalid") ||
-        errorMessage.toLowerCase().includes("already used") ||
-        errorMessage.toLowerCase().includes("already been used");
-      const isTokenError = isTokenErrorByCode || isTokenErrorByMessage;
-
-      let message: string;
-      if (
-        errorCode === AUTH_CODES.TOKEN_EXPIRED ||
-        errorMessage.toLowerCase().includes("expired")
-      ) {
-        message = "This sign-in link has expired";
-      } else if (
-        errorCode === AUTH_CODES.INVALID_TOKEN ||
-        isTokenErrorByMessage
-      ) {
-        message = "This sign-in link has already been used or is invalid";
-      } else {
-        message = errorMessage || "Verification failed";
-      }
-
+        (errorCode === AUTH_CODES.INVALID_TOKEN &&
+          !message.startsWith("sign-in callback refused")) ||
+        message.includes("expired") ||
+        message.includes("already used") ||
+        message.includes("already been used");
+      // A failed link is not handed back decoded, so read the app's own bag
+      // for the address to resend to and where to go back.
+      const bag = readStateBag(window.location.search);
       return {
         ok: false,
-        redirectTo: `/?error=${encodeURIComponent(message)}`,
         errorCode,
-        tokenExpiredOrUsed: isTokenError,
+        errorMessage,
+        tokenExpiredOrUsed,
+        email: bag?.email,
+        continueUrl: bag?.continueUrl ?? "/",
       };
     }
   };
@@ -760,7 +476,7 @@ export const useUserStore = defineStore("user", () => {
     otpLogger.debug("Verifying OTP for:", email);
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const inviteToken = getPendingInviteToken() ?? undefined;
       // Cast result to include promptAddPasskey which is returned by the API
       // but not yet in the public types (isNewUser is already surfaced).
@@ -811,7 +527,7 @@ export const useUserStore = defineStore("user", () => {
     passkeyLogger.debug("Signing in with passkey");
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const result = await client.passkeyAuthFinish(credential, challengeToken);
 
       passkeyLogger.debug("Passkey sign-in successful", {
@@ -841,7 +557,7 @@ export const useUserStore = defineStore("user", () => {
     const passkeyLogger = logger.forScope("startPasskeyAuth");
     passkeyLogger.debug("Starting passkey authentication");
 
-    const client = await jsBaoClientService.getClientAsync();
+    const client = await getAppClient();
     const result = await client.passkeyAuthStart();
     passkeyLogger.debug("Passkey auth options received");
     return result;
@@ -864,7 +580,7 @@ export const useUserStore = defineStore("user", () => {
     passkeyLogger.debug("Registering passkey", { deviceName });
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const inviteToken = getPendingInviteToken() ?? undefined;
       const result = await client.passkeyRegisterFinish(
         credential,
@@ -894,7 +610,7 @@ export const useUserStore = defineStore("user", () => {
     const passkeyLogger = logger.forScope("startPasskeyRegistration");
     passkeyLogger.debug("Starting passkey registration");
 
-    const client = await jsBaoClientService.getClientAsync();
+    const client = await getAppClient();
     const result = await client.passkeyRegisterStart();
     passkeyLogger.debug("Passkey registration options received");
     return result;
@@ -910,7 +626,7 @@ export const useUserStore = defineStore("user", () => {
     passkeyLogger.debug("Listing passkeys");
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const result = await client.passkeyList();
       passkeyLogger.debug("Passkeys retrieved", {
         count: result.passkeys.length,
@@ -935,7 +651,7 @@ export const useUserStore = defineStore("user", () => {
     passkeyLogger.debug("Deleting passkey", { passkeyId });
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const result = await client.passkeyDelete(passkeyId);
       passkeyLogger.debug("Passkey deleted successfully");
       return result;
@@ -960,7 +676,7 @@ export const useUserStore = defineStore("user", () => {
     passkeyLogger.debug("Renaming passkey", { passkeyId, newDeviceName });
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const result = await client.passkeyUpdate(passkeyId, {
         deviceName: newDeviceName,
       });
@@ -1124,7 +840,7 @@ export const useUserStore = defineStore("user", () => {
     profileLogger.debug("Updating profile", data);
 
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const updatedProfile = await client.me.update(data);
       profileLogger.debug("Profile updated successfully", updatedProfile);
 
@@ -1173,7 +889,7 @@ export const useUserStore = defineStore("user", () => {
         contentType: outputContentType,
       });
 
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       const result = await client.me.uploadAvatar(
         resizedImage,
         outputContentType
@@ -1237,13 +953,13 @@ export const useUserStore = defineStore("user", () => {
   };
 
   /**
-   * Internal helper that loads user profile and initializes preferences.
+   * Internal helper that loads the user profile.
    * Called by completeAuthentication() - do not call directly.
    */
   const onAuthentication = async (): Promise<void> => {
     const authLogger = logger.forScope("onAuthentication");
     authLogger.debug("Starting: fetching user profile");
-    const client = await jsBaoClientService.getClientAsync();
+    const client = await getAppClient();
     try {
       const profile = await client.me.get();
       authLogger.debug("Authenticated profile:", profile);
@@ -1251,41 +967,15 @@ export const useUserStore = defineStore("user", () => {
     } catch (e: unknown) {
       authLogger.warn("Failed to fetch profile after authentication:", e);
     }
-
-    if (!prefsReadyPromise) {
-      prefsReadyPromise = initializeUserPrefs().catch((e: unknown) => {
-        authLogger.warn("initializeUserPrefs error after authentication:", e);
-      });
-    }
-
-    authLogger.debug("Kicking off group memberships load (non-blocking)");
-    void refreshGroupMemberships();
   };
 
   /**
-   * Wait for the initial prefs load to complete. Used internally by getPref,
-   * setPref, etc. to ensure callers see a consistent prefs state, and by
-   * external callers that need a definitive read before proceeding.
-   */
-  const ensurePrefsReady = async (): Promise<void> => {
-    if (prefsReadyPromise) return prefsReadyPromise;
-    prefsReadyPromise = initializeUserPrefs().catch((e: unknown) => {
-      logger.forScope("ensurePrefsReady").warn("initializeUserPrefs error:", e);
-    });
-    return prefsReadyPromise;
-  };
-
-  /**
-   * Complete the authentication flow by initializing user data (profile and
-   * preferences) and then setting the authenticated state.
+   * Complete the authentication flow: load the profile, then set the
+   * authenticated state, so watchers on isAuthenticated see a current user.
    *
-   * This is the single entry point for all auth paths to finalize authentication.
-   * It ensures preferences are loaded BEFORE isAuthenticated becomes true, which
-   * is critical because watchers on isAuthenticated (e.g., document store
-   * initialization) may depend on preferences being available.
-   *
-   * All auth paths (OAuth, magic link, passkey, etc.) should call this method
-   * instead of directly manipulating isAuthenticated.
+   * This is the single entry point for all auth paths to finalize
+   * authentication; every sign-in method calls it instead of setting
+   * isAuthenticated directly.
    */
   const completeAuthentication = async (): Promise<void> => {
     if (completeAuthPromise) {
@@ -1316,7 +1006,7 @@ export const useUserStore = defineStore("user", () => {
    */
   const logout = async (redirectTo?: string): Promise<void> => {
     try {
-      const client = await jsBaoClientService.getClientAsync();
+      const client = await getAppClient();
       await client.logout({
         wipeLocal: false,
         revokeOffline: false,
@@ -1328,18 +1018,9 @@ export const useUserStore = defineStore("user", () => {
     } finally {
       isAuthenticated.value = false;
       currentUser.value = null;
-      groupMemberships.value = new Map();
-      isMembershipsReady.value = false;
-      membershipsPromise = null;
       authConfigPromise = null;
       authConfig.value = null;
       authConfigError.value = null;
-      prefsReadyPromise = null;
-      cleanupPrefs();
-
-      // Clear any user-applied theme classes from <html>
-      const { clearTheme } = useTheme();
-      clearTheme();
       // keep isInitialized true; allow re-init by clearing guard
       if (removeStatusListener) {
         try {
@@ -1364,254 +1045,6 @@ export const useUserStore = defineStore("user", () => {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // User preferences
-  // ---------------------------------------------------------------------------
-
-  const initializeUserPrefs = async (): Promise<void> => {
-    const prefsInitLogger = logger.forScope("initializeUserPrefs");
-    if (rootDocOpen) {
-      prefsInitLogger.debug("Already initialized; skipping");
-      return;
-    }
-    prefsInitLogger.debug("Initializing...");
-    try {
-      const client = await jsBaoClientService.getClientAsync();
-      const rootDocId = client.getRootDocId();
-      if (!rootDocId) {
-        prefsInitLogger.error(
-          "Error initializing user preferences: missing root document ID"
-        );
-        return;
-      }
-      await client.documents.open(rootDocId);
-      rootDocumentId = rootDocId;
-      rootDocOpen = true;
-      setupPrefsSubscription();
-      await loadUserPrefs();
-      prefsInitLogger.debug("User preferences initialized successfully");
-    } catch (error) {
-      prefsInitLogger.error("Error initializing user preferences:", error);
-    }
-  };
-
-  const setupPrefsSubscription = (): void => {
-    if (prefsUnsubscribe) return;
-    logger.debug("Setting up preferences subscription...");
-    prefsUnsubscribe = UserPref.subscribe(() => {
-      logger.debug("UserPref model changed, reloading preferences...");
-      // loadUserPrefs catches and logs its own errors; nothing to await here.
-      void loadUserPrefs();
-    });
-  };
-
-  const loadUserPrefs = async (): Promise<void> => {
-    const loadPrefsLogger = logger.forScope("loadUserPrefs");
-    try {
-      loadPrefsLogger.debug("Loading user preferences...");
-      const prefs = await UserPref.query({});
-      const prefsObject: UserPrefsMap = {};
-      const garbageKeys: string[] = [];
-      for (const pref of prefs.data) {
-        if (
-          !pref.key ||
-          pref.key === "undefined" ||
-          pref.value === undefined ||
-          pref.value === "undefined"
-        ) {
-          garbageKeys.push(pref.key ?? "");
-          continue;
-        }
-        try {
-          prefsObject[pref.key] = JSON.parse(pref.value) as unknown;
-        } catch (error) {
-          loadPrefsLogger.warn(`Failed to parse pref ${pref.key}:`, error);
-          prefsObject[pref.key] = pref.value;
-        }
-      }
-      userPrefs.value = prefsObject;
-      loadPrefsLogger.debug(
-        "User preferences loaded:",
-        Object.keys(prefsObject)
-      );
-      if (garbageKeys.length > 0) {
-        loadPrefsLogger.debug("Cleaning up garbage prefs", { garbageKeys });
-        await cleanupGarbagePrefs();
-      }
-    } catch (error) {
-      loadPrefsLogger.error("Error loading user preferences:", error);
-    }
-  };
-
-  const cleanupGarbagePrefs = async (): Promise<void> => {
-    const cleanupLogger = logger.forScope("cleanupGarbagePrefs");
-    try {
-      const allPrefs = await UserPref.query({});
-      for (const pref of allPrefs.data) {
-        if (
-          !pref.key ||
-          pref.key === "undefined" ||
-          pref.value === undefined ||
-          pref.value === "undefined"
-        ) {
-          try {
-            await pref.delete();
-          } catch (error) {
-            cleanupLogger.debug("Failed to delete garbage pref", { error });
-          }
-        }
-      }
-    } catch (error) {
-      cleanupLogger.debug("Cleanup failed", { error });
-    }
-  };
-
-  const cleanupPrefs = (): void => {
-    if (prefsUnsubscribe) {
-      try {
-        prefsUnsubscribe();
-      } catch {}
-      prefsUnsubscribe = null;
-    }
-    userPrefs.value = {};
-    rootDocOpen = false;
-    rootDocumentId = null;
-  };
-
-  /**
-   * Get a user preference value, waiting for prefs to be loaded first.
-   *
-   * @param key - The preference key
-   * @param defaultValue - Value to return if the preference is not set
-   * @returns The stored preference value or the default
-   */
-  const getPref = async <T = unknown>(
-    key: string,
-    defaultValue: T
-  ): Promise<T> => {
-    await ensurePrefsReady();
-    const value = userPrefs.value[key];
-    if (value === undefined) {
-      return defaultValue;
-    }
-    return value as T;
-  };
-
-  /**
-   * Set a user preference value. The value is JSON-serialized and stored
-   * in the user's root document for cross-device sync.
-   *
-   * @param key - The preference key
-   * @param value - The value to store (must be JSON-serializable)
-   * @throws Error if user is not authenticated
-   */
-  const setPref = async <T = unknown>(key: string, value: T): Promise<void> => {
-    const setPrefLogger = logger.forScope("setPref");
-    try {
-      setPrefLogger.debug("Request", {
-        key,
-        valuePreview: (() => {
-          try {
-            return JSON.stringify(value).slice(0, 200);
-          } catch {
-            return String(value);
-          }
-        })(),
-      });
-      if (typeof key !== "string" || key.length === 0 || key === "undefined") {
-        throw new Error(`setPref called with invalid key: ${String(key)}`);
-      }
-      if (value === undefined) {
-        throw new Error(
-          `setPref called with undefined value for key "${key}". ` +
-            "Use deletePref() to remove a preference."
-        );
-      }
-      if (!isAuthenticated.value) throw new Error("User not authenticated");
-      await ensurePrefsReady();
-      if (!rootDocOpen) {
-        logger.log("Root doc not open; initializing...");
-        await initializeUserPrefs();
-      }
-      if (!rootDocumentId) throw new Error("Root document not initialized");
-      const serializedValue = JSON.stringify(value);
-
-      // Upsert in place by the unique `key` constraint. Current js-bao
-      // updates the existing record (create-on-missing otherwise), so pref
-      // writes keep stable record identity — `UserPref.subscribe` consumers
-      // see an update rather than a delete/create pair, and concurrent
-      // cross-device writes to the same key no longer race into duplicates.
-      await UserPref.upsertByUnique(
-        "user_prefs_key_unique",
-        key,
-        { key, value: serializedValue },
-        { targetDocument: rootDocumentId }
-      );
-    } catch (error) {
-      setPrefLogger.error(`Error setting pref ${key}:`, error);
-      throw error;
-    }
-  };
-
-  /**
-   * Delete a user preference.
-   *
-   * @param key - The preference key to delete
-   * @throws Error if user is not authenticated
-   */
-  const deletePref = async (key: string): Promise<void> => {
-    const deletePrefLogger = logger.forScope("deletePref");
-    try {
-      deletePrefLogger.debug("Request", { key });
-      if (!isAuthenticated.value) throw new Error("User not authenticated");
-      await ensurePrefsReady();
-      const prefs = await UserPref.query({ key });
-      deletePrefLogger.debug("Found records", { count: prefs.data.length });
-      for (const pref of prefs.data) await pref.delete();
-    } catch (error) {
-      deletePrefLogger.error(`Error deleting pref ${key}:`, error);
-      throw error;
-    }
-  };
-
-  /**
-   * Get a snapshot of all user preferences.
-   *
-   * @returns Object containing all preference key-value pairs
-   */
-  const getAllPrefs = (): UserPrefsMap => ({ ...userPrefs.value });
-
-  /**
-   * Re-query all UserPref objects from js-bao and refresh the in-memory cache.
-   * Useful when prefs may have been loaded before the root doc finished syncing.
-   */
-  const refreshPrefs = async (): Promise<void> => {
-    await ensurePrefsReady();
-    await loadUserPrefs();
-  };
-
-  /**
-   * Delete all user preferences.
-   *
-   * @throws Error if user is not authenticated
-   */
-  const clearAllPrefs = async (): Promise<void> => {
-    const clearAllLogger = logger.forScope("clearAllPrefs");
-    try {
-      clearAllLogger.debug("Request");
-      if (!isAuthenticated.value) throw new Error("User not authenticated");
-      await ensurePrefsReady();
-      const prefs = await UserPref.query({});
-      clearAllLogger.debug("Found records", {
-        count: prefs.data.length,
-      });
-      for (const pref of prefs.data) await pref.delete();
-    } catch (error) {
-      clearAllLogger.error("Error clearing all prefs:", error);
-      throw error;
-    }
-  };
-
   return {
     // state
     currentUser,
@@ -1624,23 +1057,16 @@ export const useUserStore = defineStore("user", () => {
     // getters
     isAdmin,
 
-    // group memberships (router authCheck + app gating)
-    groupMemberships,
-    isMembershipsReady,
-    isMemberOf,
-    memberGroups,
-    refreshGroupMemberships,
-    whenMembershipsReady,
-
     // actions
     initialize,
     loadAuthConfig,
     login,
-    handleOAuthCallback,
     logout,
 
     // email sign-in (#2884) — one request, one email, both credentials
     requestEmailSignIn,
+    // the page an emailed link or an OAuth redirect opens
+    handleSignInCallback,
 
     // finishing the sign-in: the code half of the same email
     verifyOtp,
@@ -1658,14 +1084,5 @@ export const useUserStore = defineStore("user", () => {
     // profile
     updateProfile,
     uploadAvatar,
-
-    // prefs helpers
-    getPref,
-    setPref,
-    deletePref,
-    getAllPrefs,
-    refreshPrefs,
-    clearAllPrefs,
-    ensurePrefsReady,
   };
 });

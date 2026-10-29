@@ -3,7 +3,7 @@ node_modules/
 .DS_Store
 
 # NOTE: nothing generated is ignored (#3078). `js-bao-codegen-v2` emits
-# `src/models/*.generated.ts` and the CLI emits `src/types/generated/**`; all of
+# `src/models/<type>/` and the CLI emits `src/types/generated/**`; all of
 # it is committed, reviewed and tested like any other source, and `dev`,
 # `build`, `test` and `cf-deploy` all regenerate it.
 

@@ -27,7 +27,7 @@ document, and Apple's CDN caches what it gets.
 
 ## 1. Declare the iOS app id on the environment
 
-Add `iosAppId` beside that environment's `webUrl` in `.primitive/config.json`:
+Add `iosAppId` beside that environment's `webUrl` in `primitive/config.json`:
 
 ```json
 {
@@ -66,7 +66,7 @@ primitive env add prod --api-url https://api.primitiveapi.com --app-id <app-id> 
 ```
 
 `env add` creates an environment; for one that already exists, edit
-`.primitive/config.json`.
+`primitive/config.json`.
 
 An environment with **no** `iosAppId` serves no association document at all —
 that is the correct state for a web-only environment, and better than serving
