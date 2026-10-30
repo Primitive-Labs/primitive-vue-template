@@ -7,7 +7,7 @@
 - `/src/assets`: Static images/assets
 - `/src/components`: Vue Components. Organized by area.
 - `/src/components/ui`: Installation location for base shadcn-vue components.
-- `/src/config`: The app's environment-derived config and the client options (`envConfig.ts`).
+- `/src/config`: The app's environment-derived config and the client options (`envConfig.ts`). `storage.ts` keeps db3s on the device, in the browser's origin-private file system (OPFS): the storage engine's worker, its tab-sharing broker and the two wasm files it asks for. Import the worker and broker only as URLs (`?worker&url`, `?url`), never as constructors, so a test that imports the client options starts no worker.
 - `/src/lib`: Shared business logic, not Vue specific -- pure typescript code only. `client.ts` owns the app's one client: `main.ts` calls `initializeAppClient(getJsBaoConfig())`, and everything else uses `await getAppClient()`.
 - `/src/composables`: Vue composables (`useJsBaoDataLoader`, which loads data and reloads on model changes and on the client's `db3:ready` / `db3:gone` / `db3:evicted`).
 - `/src/layouts`: Vue layout components. Used directly by the router to render different layouts for different types of pages based on route

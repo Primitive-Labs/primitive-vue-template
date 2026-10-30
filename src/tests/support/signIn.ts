@@ -47,7 +47,9 @@ export async function signIn(): Promise<{
     appId: import.meta.env.VITE_APP_ID,
     apiUrl: import.meta.env.VITE_API_URL,
     wsUrl: import.meta.env.VITE_WS_URL,
-    storageConfig: { type: "auto" },
+    // The tests need no persisted session, and the in-memory store needs no
+    // native module (the app's install does not build better-sqlite3).
+    storageConfig: { type: "memory" },
     databaseConfig: databaseConfig(),
     models: allModels,
   });

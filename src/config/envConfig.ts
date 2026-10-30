@@ -2,6 +2,7 @@
 import { allModels } from "@/models";
 import type { JsBaoClientOptions } from "js-bao-wss-client";
 import type { LogLevel } from "@/lib/logger";
+import { getDatabaseConfig } from "./storage";
 
 /**
  * Path on the app's own origin that renders the OAuth / magic-link callback.
@@ -61,8 +62,9 @@ function getRefreshProxyBaseUrl(): string {
 /**
  * The client options `main.ts` hands `initializeAppClient`: the environment's
  * identity, the callback URL, session storage and the refresh proxy, the log
- * level, and the generated models (`@/models`, rewritten by `pnpm codegen`
- * from `primitive/<env>/db3-types/`).
+ * level, the generated models (`@/models`, rewritten by `pnpm codegen`
+ * from `primitive/<env>/db3-types/`), and where db3s are kept on the device
+ * (`./storage.ts`).
  */
 export function getJsBaoConfig(): JsBaoClientOptions {
   const auth = {
@@ -84,6 +86,7 @@ export function getJsBaoConfig(): JsBaoClientOptions {
     auth,
     logLevel: getLogLevel(),
     models: allModels,
+    databaseConfig: getDatabaseConfig(),
   };
 }
 
