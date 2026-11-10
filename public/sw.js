@@ -300,8 +300,13 @@ self.addEventListener("fetch", (event) => {
   try {
     const url = new URL(event.request.url);
 
-    // Quick pre-check: only handle blob download requests
-    if (!url.pathname.includes("/api/documents/")) return;
+    // Quick pre-check: only handle blob download requests, of a document or
+    // of a database (db3)
+    if (
+      !url.pathname.includes("/api/documents/") &&
+      !url.pathname.includes("/api/db3/")
+    )
+      return;
     if (!url.pathname.includes("/blobs/")) return;
     if (!url.pathname.endsWith("/download")) return;
 
@@ -315,7 +320,11 @@ self.addEventListener("fetch", (event) => {
         if (url.origin !== apiOrigin) return fetch(event.request);
 
         if (!STATE.appId) return fetch(event.request);
-        if (!url.pathname.startsWith(`/app/${STATE.appId}/api/documents/`))
+        const api = `/app/${STATE.appId}/api/`;
+        if (
+          !url.pathname.startsWith(`${api}documents/`) &&
+          !url.pathname.startsWith(`${api}db3/`)
+        )
           return fetch(event.request);
 
         return handleProxy(event.request);

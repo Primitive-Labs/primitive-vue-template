@@ -7,6 +7,8 @@ import { primitiveEnv } from "primitive-admin/vite";
 import { defineConfig } from "vite";
 import vueDevTools from "vite-plugin-vue-devtools";
 
+import { sqlJsNodeBuiltins } from "./vite-plugins/sqlJsNodeBuiltins.ts";
+
 // https://vite.dev/config/
 export default defineConfig(() => {
   // The Primitive environment (backend URL + app ID) is resolved by this
@@ -18,15 +20,24 @@ export default defineConfig(() => {
   // (an app whose VITE_APP_ID / VITE_API_URL come straight from the
   // environment, e.g. in CI) could apply.
   return {
-    plugins: [vue(), vueJsx(), vueDevTools(), tailwindcss(), primitiveEnv()],
+    plugins: [
+      vue(),
+      vueJsx(),
+      vueDevTools(),
+      tailwindcss(),
+      primitiveEnv(),
+      // sql.js (the in-browser database engine) requires fs, path and crypto
+      // on its Node branch only; keep them out of the browser bundle.
+      sqlJsNodeBuiltins(),
+    ],
     build: {
-      // The Primitive client + Vue runtime baseline is ~1.35 MB minified
-      // (~385 kB gzip), so Vite's generic 500 kB chunk advisory always fires
+      // The Primitive client + Vue runtime baseline is ~1.54 MB minified
+      // (~436 kB gzip), so Vite's generic 500 kB chunk advisory always fires
       // on a fresh scaffold. Calibrate the threshold just above that baseline
       // — the advisory stays useful for real app-side bloat. As your app
       // grows, prefer code-splitting (dynamic import() per route) over
       // raising this further.
-      chunkSizeWarningLimit: 1500,
+      chunkSizeWarningLimit: 1600,
     },
     resolve: {
       alias: {

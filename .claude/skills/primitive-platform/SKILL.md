@@ -2,16 +2,17 @@
 name: primitive-platform
 description: >
   Fetches the Primitive platform's agent guides and applies them. MUST be used whenever the user
-  is writing or reviewing code that uses js-bao, js-bao-wss-client, primitive-app,
-  primitive-functions, or any Primitive platform feature (databases, server functions,
+  is writing or reviewing code that uses js-bao, js-bao-wss-client, primitive-functions,
+  JsBaoClient (Swift), or any Primitive platform feature (databases, server functions,
   prompts, integrations, blobs, authentication, users/groups), and before running any `primitive`
   CLI command. All development guidance lives in the guides this skill fetches; after writing or
   modifying code that touches Primitive APIs, it cross-references the code against those guides
   and corrects mistakes. Use this skill even if the user doesn't explicitly ask for it. Also use it
   when something looks like a platform bug or missing platform capability, to record the platform
   feedback in the app's PRIMITIVE-FEEDBACK.md. Also trigger whenever the user wants to upgrade or
-  update the app to a newer platform version — bumping js-bao, js-bao-wss-client, primitive-app, or
-  the primitive CLI — which follows the "Upgrading Platform Libraries" workflow below.
+  update the app to a newer platform version — bumping js-bao, js-bao-wss-client, JsBaoClient or
+  the primitive CLI, or moving an app off the retired `primitive-app` / `swift-primitive-app`
+  libraries — which follows the "Upgrading Platform Libraries" workflow below.
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
 
@@ -95,8 +96,10 @@ primitive guides get <topic>           # the topic's default variant
 After writing or modifying code that touches Primitive, review it without being asked:
 
 1. **Identify the features touched.** Imports from `js-bao`, `js-bao-wss-client`,
-   `primitive-app`, or `primitive-functions`; files in the project's configuration tree; model
-   definitions and schemas.
+   `primitive-functions`, or `JsBaoClient`; files in the project's configuration tree; model
+   definitions and schemas. An import from `primitive-app` or `PrimitiveApp` means the app has
+   not migrated off a retired library: report it, and point at the `changelog` guide's
+   retirement entry (Step 6 of "Upgrading Platform Libraries").
 2. **Fetch those guides** in the project's language and platform.
 3. **Compare the code against them.** API usage, lifecycle, access and authorization, anything
    the guide warns against, and any follow-up step the guide requires that the change skipped.
@@ -106,7 +109,9 @@ After writing or modifying code that touches Primitive, review it without being 
 ## When the user is starting a new feature
 
 1. Run `primitive guides list` and pick every relevant topic.
-2. Fetch those guides in the project's language and platform.
+2. Fetch those guides in the project's language and platform. In an app that still uses
+   `primitive-app` or `PrimitiveApp`, build on the client and the app's own code rather than
+   the retired library, and suggest the migration (Step 6 of the upgrade workflow).
 3. Recommend a data model from the guides. If requirements are ambiguous, ask clarifying
    questions first: a data model is much easier to get right up front than to migrate.
 4. Outline the implementation, citing the guide patterns it follows.
@@ -120,11 +125,9 @@ After writing or modifying code that touches Primitive, review it without being 
 
 ## When the user is moving an app's data to another app
 
-Fetch the `documents` guide and follow its export/import sections. A migration is two
-exports into one directory and two imports out of it, in a fixed order — the documents
-bundle, then the collections those documents sit in — and the guide has the commands, the
-order they must run in, and what does not travel. Don't run a single export or import from
-memory: the wrong order silently loses every collection's document membership.
+Fetch `primitive guides get databases` and follow its export and import steps. Never run an
+export or import from memory: the guide has the commands, the order they run in, and what
+does not travel.
 
 ## Upgrading Platform Libraries
 
@@ -134,17 +137,37 @@ platform bugs should come out, the starter template the app was scaffolded from 
 moved too, and new platform capabilities should be considered. The refreshed guides are the
 source of truth for what the platform can do now.
 
+The first upgrade after the starter templates folded the app libraries in is also a
+migration: an app on `primitive-app` (web) or `swift-primitive-app` (iOS) moves onto the
+template's own code in Step 6. A library is retired when the `changelog` guide's **Breaking**
+entries say so (`primitive guides get changelog --refresh`); npm may also mark the package
+deprecated, but the changelog is the rule. Moving `js-bao-wss-client` or `JsBaoClient` forward
+while keeping a retired library is not a path the platform tests (the frozen Swift library
+can stop building against a newer client, and `primitive-app`'s peer range may refuse it), so
+the choice is to migrate, or to stay on the whole old set for now. Never pin back or suppress
+to keep both.
+
 The backend is upgraded by the platform team, not by the app — the app only chooses which
 environment it points at (see the `configuration` guide). A library upgrade against the production environment
 needs no server-side changes.
 
 ### 1. Snapshot the current state
 
-- Read `package.json` and note the installed versions of the platform packages the app
-  uses: `js-bao`, `js-bao-wss-client`, `primitive-app`, and `primitive-admin` (the CLI).
-- Check what's available: `pnpm view <pkg> dist-tags` for each. Compare the target tag's
-  version against what's installed — a dist-tag can lag (or even point behind another
-  tag), so confirm the upgrade actually moves forward before proceeding.
+Snapshot each client the app has (an app with a web and an iOS client snapshots both):
+
+- **Web.** Read `package.json` and note the installed versions of the platform packages:
+  `js-bao`, `js-bao-wss-client`, and `primitive-admin` (the CLI, which is also a dev
+  dependency: the template's build imports `primitive-admin/vite`). Check what's available:
+  `pnpm view <pkg> dist-tags` for each. Compare the target tag's version against what's
+  installed — a dist-tag can lag (or even point behind another tag), so confirm the upgrade
+  actually moves forward before proceeding.
+- **iOS.** Note the `JsBaoClient` package's `branch:` in `Package.swift` (and in `project.yml`
+  when the app has one): `main` is production, `alpha` is alpha. Note the revision it is
+  pinned to in `Package.resolved`, and the version in `.primitive-cli-version`.
+- **Retired libraries.** A dependency the `changelog` guide's **Breaking** entries retire
+  (`primitive-app` in `package.json`; the `PrimitiveApp` or `PrimitiveAppTesting` products of
+  `swift-primitive-app` in `Package.swift` or `project.yml`) is never bumped. Note it for
+  Step 6, which removes it. `pnpm view <pkg> deprecated` may confirm a retired npm package.
 - Locate the app's platform feedback doc (convention below). Note its upgrade stamp and
   the tracked workarounds — Step 5 revisits each one.
 
@@ -166,15 +189,34 @@ Upgrading the CLI first matters for two reasons:
 
 ### 3. Upgrade the app's libraries
 
+Web, with pnpm by default (use npm only if the app already uses npm):
+
 ```bash
-# pnpm by default (use npm only if the app already uses npm), for the packages the app uses:
-pnpm add js-bao@latest js-bao-wss-client@latest primitive-app@latest
+pnpm add js-bao@latest js-bao-wss-client@latest   # the packages the app uses
+pnpm add -D primitive-admin@latest                # the CLI the build imports from
 ```
+
+iOS:
+
+```bash
+swift package update   # moves JsBaoClient to the newest commit on its branch
+```
+
+An iOS app built through Xcode also needs its project's packages updated: Xcode resolves
+from its own copy of `Package.resolved`, so run Xcode's package update, or the template's
+`scripts/sync-xcode-pins.sh`, which copies the root pin into the project (the template's
+build scripts run it before every `xcodebuild`). Then set `.primitive-cli-version` to the
+installed CLI's version (`primitive --version`). That file is only the codegen phase's
+fallback: the phase runs `PRIMITIVE_CLI` when it is set, then an installed `primitive`, and
+only when neither exists `npx` with the version the file pins.
+
+A retired library stays where it is until Step 6 removes it.
 
 Upgrade the libraries **before** fetching guides: the guides system selects its version
 channel from the *installed* `js-bao-wss-client` major, so fetching first returns guides
-for the old version. Then refetch the guides for every feature area the app uses,
-passing `--refresh` on the first call.
+for the old version.
+Then refetch the guides for every feature area the app uses, passing `--refresh` on the
+first call (and `--language swift` for an iOS app).
 
 ### 4. Fix breaking changes, then scan for deprecated API use
 
@@ -182,6 +224,11 @@ Run the app's typecheck/build. For every error, consult the refreshed guide for 
 feature area and migrate the code to the current API — don't pin back or suppress. A
 major version bump means breaking changes are expected; treat the migration as part of
 the upgrade, not an optional follow-up.
+
+Some errors mean a retired library, not an API change: `Cannot find module 'primitive-app'`
+or a typecheck error on its exports (web), `no such module 'PrimitiveApp'`, or a frozen
+`PrimitiveApp` that no longer builds against the updated `JsBaoClient` (iOS). Those are
+the migration. Do Step 6 first, then come back here.
 
 Once it builds, find every platform API the app still uses that the platform has
 deprecated. A deprecated surface works today and is removed in a later major, so this
@@ -232,6 +279,20 @@ so default to removing them the moment they're unnecessary.
 
 ### 6. Adopt template updates
 
+When Step 1 found a retired library, this step is the upgrade. The `changelog` guide's
+**Breaking** entry for the retirement lists the migration for each platform; follow it
+rather than diffing file by file. In outline: the app moves to the template's client setup
+(`src/lib/client.ts`), auth store and sign-in pages on the web, or to the template's
+`AppState` and `AuthModel` with their views on iOS; `primitive-app/vite` becomes
+`primitive-admin/vite`; the dev tools go; the in-app test groups move to plain vitest or
+XCTest with the template's sign-in helper; and the dependency is dropped. The entry holds
+the details. Then run the baseline diff below for everything else.
+
+The migration replaces the library's starter pieces only. Where the app itself uses
+something the template no longer has — user prefs, theming, group-aware routing, its root
+document, its own data model — that use stays: the app changed it, so ask (the third case
+below).
+
 The app was scaffolded by `primitive init` from a starter template —
 `Primitive-Labs/primitive-vue-template` for web apps, `Primitive-Labs/primitive-swift-template`
 for iOS. Those templates keep moving with the platform: config, setup, and wiring fixes
@@ -279,7 +340,9 @@ guides for the app's feature areas. Compare against what the app actually does:
 
 Run the app's tests, apply the post-change review above to everything modified, and
 update the feedback doc's upgrade stamp (date, channel, versions, and the template
-commit synced in Step 6). If the upgrade changed the configuration tree and the
+commit synced in Step 6). Versions are the web packages' versions, or for iOS the
+`JsBaoClient` branch and the revision `Package.resolved` now pins; an app with both
+clients lists both. If the upgrade changed the configuration tree and the
 environment is shared, verify against the child app from Step 4, not the shared
 environment; the `configuration` guide's "Child apps" workflow covers applying the
 merged tree to the parent and deleting the child.
@@ -299,7 +362,8 @@ have one, create it the first time there is something to record:
 ## Upgrade stamp
 - Last upgraded: 2026-07-21
 - Channel: production
-- Versions: js-bao-wss-client 2.0.6, primitive-app 3.0.5, js-bao 0.5.1, primitive-admin 1.0.55
+- Versions: js-bao-wss-client 3.5.0, js-bao 0.12.0, primitive-admin 1.1.0
+- Versions (iOS): JsBaoClient main @ a1d82eb
 - Template: primitive-vue-template @ main 0f1c2d3
 
 ## Open items
