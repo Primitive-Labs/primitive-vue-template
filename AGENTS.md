@@ -15,7 +15,7 @@
 - `/src/pages`: Top level Vue components that map to a route.
 - `/src/router`: Vue-router configuration
 - `/src/stores`: Pinia stores. The template ships only `userStore`: the signed-in user, sign-in (code, link, Google, passkeys), profile and avatar. App data belongs in the app's own stores or components, read through the generated models.
-- `/src/tests`: `pnpm test` specs (vitest, in Node). `src/tests/support/signIn.ts` signs in the test account (`PRIMITIVE_TEST_EMAIL`) and returns a client.
+- `/src/tests`: `pnpm test` specs (vitest, in Node). `src/tests/support/signIn.ts` signs the test account (`PRIMITIVE_TEST_EMAIL`) in as the app's client and returns it, so a spec tests `src/lib` code that awaits `getAppClient()`; `signOut()` disconnects it.
 - `/public`: Copied verbatim into `dist/` by Vite. `_headers` sets response headers on those assets (Cloudflare Workers static assets read it) — the one place for that, since `worker.js` is library-provided. `.well-known/apple-app-site-association` is what lets an iOS client of this same app open this domain's links: the emailed sign-in link is one `https://<domain>/oauth/callback` URL that opens the app where it is installed and signs in here otherwise. That document is NOT committed — `scripts/deploy.mjs` generates it before each build from the deployed Primitive environment's `iosAppId`, because an app has one bundle id per environment (`.well-known/apple-app-site-association.example` is only a reference copy). `.well-known/README.md` has the activation order — declare `iosAppId`, deploy, verify with `curl`, and only then enable the app's `applinks:` entitlement.
 
 ## General Coding Guidelines

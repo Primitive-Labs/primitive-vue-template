@@ -150,13 +150,20 @@ Generated files are committed; never edit them. For field options, records and a
 
 `pnpm test` runs the `.spec.ts` files under `src/tests/` with vitest in Node,
 against the app's Primitive server. `signIn()` from `src/tests/support/signIn.ts`
-signs in your test account and returns a client:
+signs your test account in as the app's client (`src/lib/client.ts`) and
+returns it, so a spec can call the client directly or test code under
+`src/lib/` that awaits `getAppClient()`:
 
 ```ts
 const { client, email } = await signIn();
 const profile = await client.me.get();
+// A src/lib function that awaits getAppClient() runs as the test user too.
+expect(await myEmail()).toBe(profile?.email);
 await signOut(client);
 ```
+
+`signOut()` disconnects the app's client; a later `signIn()` in the same file
+signs in a new one.
 
 ### One-time setup
 
@@ -183,6 +190,12 @@ PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test
 
 Without `PRIMITIVE_TEST_EMAIL` the run fails, naming the variable.
 
+`pnpm test` runs codegen first, which copies sql.js's wasm to
+`public/sql-wasm.wasm` for the test client's database engine. A run that skips
+it (`pnpm exec vitest run src/tests/<spec>.spec.ts` in a fresh checkout) fails
+in `signIn()`, naming the file: run `pnpm codegen` once, or go through
+`pnpm test`, which also takes a file filter (`pnpm test src/tests/<spec>.spec.ts`).
+
 To run against another environment, pass vitest's `--mode` and keep a matching
 `.env.<mode>` file — **without a `--` separator**:
 
@@ -200,7 +213,7 @@ PRIMITIVE_TEST_EMAIL="you+primitivetest-ci@yourdomain.com" pnpm test --mode stag
 For CI systems that consume JUnit output:
 
 ```bash
-PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-results.xml
+PRIMITIVE_TEST_EMAIL="..." pnpm test --reporter=junit --outputFile=test-results.xml
 ```
 
 ### Gotchas
@@ -213,10 +226,10 @@ PRIMITIVE_TEST_EMAIL="..." pnpm vitest run --reporter=junit --outputFile=test-re
   backend, declare `VITE_EXPECTED_PRIMITIVE_ENV` in its `.env.<mode>` (see
   [Pinning a mode to a Primitive environment](#pinning-a-mode-to-a-primitive-environment)).
 - The test session lives about 30 minutes; split a longer suite.
-- Specs build their own client (`signIn()`), which keeps db3s in memory, and
-  never import the app's client options: Node has no browser storage. If a spec
-  imports `src/config/envConfig.ts`, it gets the storage options as plain URL
-  strings and starts no worker.
+- `signIn()` starts the app's client with its own options, which keep db3s in
+  memory, rather than the app's client options: Node has no browser storage.
+  If a spec imports `src/config/envConfig.ts`, it gets the storage options as
+  plain URL strings and starts no worker.
 
 ## Configuration
 
