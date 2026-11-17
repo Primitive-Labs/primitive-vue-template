@@ -3,6 +3,17 @@ import { allModels } from "@/models";
 import type { JsBaoClientOptions } from "js-bao-wss-client";
 import type { LogLevel } from "@/lib/logger";
 import { getDatabaseConfig } from "./storage";
+import {
+  loadHostedConfig,
+  refreshProxyOption,
+  type HostedConfig,
+} from "./hostedConfig";
+
+/**
+ * True in a hosted build (`pnpm build:hosted`, Vite mode `hosted`). Such a
+ * build holds no app identity: `loadIdentity()` reads it from the origin.
+ */
+export const IS_HOSTED_BUILD = import.meta.env.MODE === "hosted";
 
 /**
  * Path on the app's own origin that renders the OAuth / magic-link callback.
@@ -42,40 +53,54 @@ export function resolveOauthRedirectUri(): string {
   }
 }
 
-// Raw environment-derived config shared between router, client, and logging
+// Raw environment-derived config shared between router, client, and logging.
+// In a hosted build the identity fields start empty and `loadIdentity()`
+// fills them from the origin before the client options are built.
 export const config = {
   appName: import.meta.env.VITE_APP_NAME ?? "Primitive Template App",
-  appId: import.meta.env.VITE_APP_ID,
-  apiUrl: import.meta.env.VITE_API_URL,
-  wsUrl: import.meta.env.VITE_WS_URL,
+  appId: IS_HOSTED_BUILD ? "" : import.meta.env.VITE_APP_ID,
+  apiUrl: IS_HOSTED_BUILD ? "" : import.meta.env.VITE_API_URL,
+  wsUrl: IS_HOSTED_BUILD ? "" : import.meta.env.VITE_WS_URL,
   oauthRedirectUri: resolveOauthRedirectUri(),
   enableAuthProxy: import.meta.env.VITE_ENABLE_AUTH_PROXY === "true",
   logLevel: import.meta.env.VITE_LOG_LEVEL,
+  /** What the origin served at /__primitive/config.json, in a hosted build. */
+  hosted: null as HostedConfig | null,
 };
 
-function getRefreshProxyBaseUrl(): string {
-  return typeof window !== "undefined"
-    ? `${window.location.origin}/proxy`
-    : "/proxy";
+/**
+ * Fill in the app's identity before the client is created. Every build but a
+ * hosted one already has it, baked in by `primitiveEnv()`, and returns at
+ * once. A hosted build fetches `/__primitive/config.json` from its own origin
+ * and rejects with a `HostedConfigError` when the origin does not serve one.
+ */
+export async function loadIdentity(): Promise<void> {
+  if (!IS_HOSTED_BUILD) return;
+  const hosted = await loadHostedConfig();
+  config.hosted = hosted;
+  config.appId = hosted.appId;
+  config.apiUrl = hosted.apiUrl;
+  config.wsUrl = hosted.wsUrl;
 }
 
 /**
- * The client options `main.ts` hands `initializeAppClient`: the environment's
- * identity, the callback URL, session storage and the refresh proxy, the log
+ * The client options `main.ts` hands `initializeAppClient`, once
+ * `loadIdentity()` has run: the environment's identity, the callback URL, session storage and the refresh proxy, the log
  * level, the generated models (`@/models`, rewritten by `pnpm codegen`
  * from `primitive/<env>/db3-types/`), and where db3s are kept on the device
  * (`./storage.ts`).
  */
 export function getJsBaoConfig(): JsBaoClientOptions {
+  // A hosted build signs in through the origin's proxy at /__primitive; any
+  // other build through the self-hosted Worker's /proxy when enabled.
+  const refreshProxy = refreshProxyOption({
+    hosted: config.hosted,
+    enableAuthProxy: config.enableAuthProxy,
+    pageOrigin: typeof window !== "undefined" ? window.location.origin : "",
+  });
   const auth = {
     persistJwtInStorage: true,
-    ...(config.enableAuthProxy
-      ? {
-          refreshProxy: {
-            baseUrl: getRefreshProxyBaseUrl(),
-          },
-        }
-      : {}),
+    ...(refreshProxy ? { refreshProxy } : {}),
   };
 
   return {
@@ -110,8 +135,12 @@ export function getLogLevel(): LogLevel {
 
 // Validate required configuration (dev aid). oauthRedirectUri is intentionally
 // omitted — it always resolves to a value (defaulting to the running origin).
+// A hosted build has no identity until `loadIdentity()` runs, so it is not
+// checked here.
 const requiredVars = ["appId", "apiUrl", "wsUrl"] as const;
-const missingVars = requiredVars.filter((key) => !config[key]);
+const missingVars = IS_HOSTED_BUILD
+  ? []
+  : requiredVars.filter((key) => !config[key]);
 
 if (missingVars.length > 0) {
   console.error("Missing required Primitive configuration:", missingVars);

@@ -7,10 +7,23 @@ import { primitiveEnv } from "primitive-admin/vite";
 import { defineConfig } from "vite";
 import vueDevTools from "vite-plugin-vue-devtools";
 
+import {
+  HOSTED_BUILD_LINE,
+  HOSTED_EMPTY_IDENTITY,
+  HOSTED_MODE,
+  hostedBuild,
+} from "./vite-plugins/hostedBuild.ts";
 import { sqlJsNodeBuiltins } from "./vite-plugins/sqlJsNodeBuiltins.ts";
 
 // https://vite.dev/config/
-export default defineConfig(() => {
+export default defineConfig(({ command, mode }) => {
+  // A hosted build (`pnpm build:hosted`) carries no app identity: it reads it
+  // at start-up from /__primitive/config.json on the origin Primitive hosting
+  // serves it from (src/config/hostedConfig.ts). So primitiveEnv() is not
+  // registered, and the identity keys are defined empty.
+  const hosted = mode === HOSTED_MODE;
+  if (hosted && command === "build") console.log(HOSTED_BUILD_LINE);
+
   // The Primitive environment (backend URL + app ID) is resolved by this
   // plugin from primitive/config.json — the one place it is typed. Select it
   // with `primitive env use <name>`, or `--primitive-env` on a deploy.
@@ -25,19 +38,20 @@ export default defineConfig(() => {
       vueJsx(),
       vueDevTools(),
       tailwindcss(),
-      primitiveEnv(),
+      ...(hosted ? [hostedBuild()] : [primitiveEnv()]),
       // sql.js (the in-browser database engine) requires fs, path and crypto
       // on its Node branch only; keep them out of the browser bundle.
       sqlJsNodeBuiltins(),
     ],
+    ...(hosted ? { define: HOSTED_EMPTY_IDENTITY } : {}),
     build: {
-      // The Primitive client + Vue runtime baseline is ~1.54 MB minified
-      // (~436 kB gzip), so Vite's generic 500 kB chunk advisory always fires
+      // The Primitive client + Vue runtime baseline is ~1.64 MB minified
+      // (~463 kB gzip), so Vite's generic 500 kB chunk advisory always fires
       // on a fresh scaffold. Calibrate the threshold just above that baseline
       // — the advisory stays useful for real app-side bloat. As your app
       // grows, prefer code-splitting (dynamic import() per route) over
       // raising this further.
-      chunkSizeWarningLimit: 1600,
+      chunkSizeWarningLimit: 1700,
     },
     resolve: {
       alias: {

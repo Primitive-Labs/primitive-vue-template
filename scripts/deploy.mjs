@@ -10,6 +10,9 @@
  *   --deploy-env <name>     WHICH FRONT END. The Vite mode (`--mode <name>`,
  *                           so `.env.<name>` applies) and the Wrangler
  *                           environment (`[env.<name>]` in wrangler.toml).
+ *                           `hosted` is refused: that mode is the Primitive
+ *                           hosting build (`pnpm build:hosted`, published
+ *                           with `primitive hosting deploy dist`).
  *
  *   --primitive-env <name>  WHICH BACKEND / APP. A key in
  *                           `primitive/config.json`, supplying apiUrl,
@@ -180,6 +183,9 @@ const USAGE = `Usage: pnpm cf-deploy --deploy-env <name> --primitive-env <name> 
 Both are required — neither is inferred from the other.
 
   pnpm cf-deploy --deploy-env production --primitive-env prod`;
+
+/** The Vite mode of `pnpm build:hosted`, which this script refuses. */
+const HOSTED_MODE = "hosted";
 
 function fail(...lines) {
   for (const line of lines) console.error(`[deploy] ${line}`);
@@ -904,6 +910,17 @@ function authoringNote(env, origin) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // A hosted build carries no app identity: it reads it from the origin's
+  // /__primitive/config.json, which only Primitive hosting serves. Deployed to
+  // this Worker it could never start, so it is refused before anything runs.
+  if (args.deployEnv === HOSTED_MODE) {
+    fail(
+      `--deploy-env ${HOSTED_MODE} is the Primitive hosting build; it cannot run on a self-hosted Worker.`,
+      "To publish on Primitive hosting: pnpm build:hosted, then primitive hosting deploy dist.",
+      "To self-host with this command, pass another deploy environment, e.g. --deploy-env production.",
+    );
+  }
 
   if (!args.deployEnv || !args.primitiveEnv) {
     const missing = [

@@ -27,10 +27,8 @@ import {
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { getAppClient } from "../lib/client";
-import {
-  clearPendingInviteToken,
-  getPendingInviteToken,
-} from "../lib/inviteToken";
+import { getPendingInviteToken, settleInviteToken } from "../lib/inviteToken";
+import { inviteTokenAfterSignIn } from "../lib/inviteLanding";
 import { appBaseLogger } from "../lib/logger";
 import { emailSignInRedirect, readStateBag } from "../lib/signInState";
 export { AUTH_CODES, AuthError } from "js-bao-wss-client";
@@ -415,7 +413,9 @@ export const useUserStore = defineStore("user", () => {
       const result = await client.handleSignInCallback(undefined, {
         inviteToken,
       });
-      if (inviteToken) clearPendingInviteToken();
+      // A link opened in another tab has no pending token; the bag carried it.
+      const carried = inviteTokenAfterSignIn(inviteToken, result.state);
+      if (carried) settleInviteToken(carried);
       callbackLogger.debug("Signed in", {
         method: result.method,
         isNewUser: result.isNewUser,
@@ -485,7 +485,7 @@ export const useUserStore = defineStore("user", () => {
         isNewUser?: boolean;
         promptAddPasskey?: boolean;
       };
-      if (inviteToken) clearPendingInviteToken();
+      if (inviteToken) settleInviteToken(inviteToken);
 
       otpLogger.debug("OTP verified successfully", {
         userId: result.user.userId,
@@ -588,7 +588,7 @@ export const useUserStore = defineStore("user", () => {
         deviceName,
         { inviteToken }
       );
-      if (inviteToken) clearPendingInviteToken();
+      if (inviteToken) settleInviteToken(inviteToken);
       passkeyLogger.debug("Passkey registered successfully");
       return result;
     } catch (err: unknown) {
