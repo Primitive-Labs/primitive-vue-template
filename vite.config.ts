@@ -7,6 +7,7 @@ import { primitiveEnv } from "primitive-admin/vite";
 import { defineConfig } from "vite";
 import vueDevTools from "vite-plugin-vue-devtools";
 
+import { appVersion } from "./vite-plugins/appVersion.ts";
 import {
   HOSTED_BUILD_LINE,
   HOSTED_EMPTY_IDENTITY,
@@ -42,6 +43,10 @@ export default defineConfig(({ command, mode }) => {
       // sql.js (the in-browser database engine) requires fs, path and crypto
       // on its Node branch only; keep them out of the browser bundle.
       sqlJsNodeBuiltins(),
+      // Stamps package.json's version into the client (appVersion) and writes
+      // version.json beside the bundle for the update banner. Stops the build
+      // on a version the client would refuse.
+      appVersion(),
     ],
     ...(hosted ? { define: HOSTED_EMPTY_IDENTITY } : {}),
     build: {

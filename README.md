@@ -60,6 +60,7 @@ Visit `http://localhost:5173` and sign in with the code from the email.
 - `AppLayout.vue` — collapsible sidebar (`AppSidebar.vue`) + content area for signed-in routes
 - `LoginLayout.vue` — split layout for auth pages (login form + marketing carousel)
 - `PrimitiveUserMenu`, `PrimitiveMobileTabBar`, `PrimitiveLoadingGate`, `PrimitiveLogoSpinner`, `DeleteConfirmationDialog` shared components
+- `AppUpdateBanner` and `AppUpdateGate`: tell users a newer build exists, and stop a build that is no longer supported — see [App Versions and Updates](#app-versions-and-updates)
 
 ### UI kit
 - shadcn-vue components under `src/components/ui/`: avatar, button, card, carousel, dialog, dropdown-menu, input, label, separator, sheet, sidebar, skeleton, tooltip (add more with `pnpm dlx shadcn-vue@latest add <name>`)
@@ -452,6 +453,43 @@ The hosted mode reads `.env`, `.env.local`, `.env.hosted` and
   line: Primitive hosting sets headers and routing itself and refuses a
   deployment that carries `_headers` or `_redirects`. The self-hosted build
   keeps the file.
+
+## App Versions and Updates
+
+The app's version is the `version` in `package.json`. Every build (`pnpm dev`,
+`pnpm build`, `pnpm build:hosted`) stamps it into the client as `appVersion`,
+and the app's client version policy in `primitive/<env>/app.toml` decides what
+users of that version see:
+
+```toml
+[clients.web]
+latest = "1.4.0"         # below it: a dismissible "new version" banner
+minRecommended = "1.2"   # below it: the banner recommends updating
+minRequired = "1.0"      # below it: a full-screen gate with a Reload button
+```
+
+Push it with `primitive config push`. Raise `version` in `package.json` with
+each release you want users to move to. A version is one to three
+dot-separated numbers of up to six digits each, such as `1.4.2`; anything else
+(`1.0.0-beta.1`, `v1.2`) stops the build with a message naming the value.
+
+Every build also writes `version.json` beside the bundle, with the version, a
+build id and the build time. The banner reads it from the page's origin when it
+mounts, each time the page returns to the foreground and hourly, and shows the
+"new version" banner when the origin serves a different build from the one the
+page is running, even with no policy. `pnpm dev` writes no file and runs
+no check.
+
+- **The banner** (`src/components/shared/AppUpdateBanner.vue`) sits at the
+  bottom of the screen with Reload and Dismiss. A dismissal lasts, across
+  reloads, until a new reason appears: a raised `latest` or `minRecommended`,
+  or another build on the origin.
+- **The gate** (`src/components/shared/AppUpdateGate.vue`) covers the page
+  while the version is below `minRequired` or the server refuses it, and goes
+  away by itself when that changes. It cannot be dismissed.
+
+Both reload the page; `updateUrl` is not used on the web. To remove either,
+delete its file and its two lines (the import and the tag) in `src/App.vue`.
 
 ## Deploying to Production
 

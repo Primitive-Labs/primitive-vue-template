@@ -2,6 +2,7 @@
 import { allModels } from "@/models";
 import type { JsBaoClientOptions } from "js-bao-wss-client";
 import type { LogLevel } from "@/lib/logger";
+import { APP_VERSION } from "@/lib/appUpdate";
 import { getDatabaseConfig } from "./storage";
 import {
   loadHostedConfig,
@@ -86,7 +87,7 @@ export async function loadIdentity(): Promise<void> {
 /**
  * The client options `main.ts` hands `initializeAppClient`, once
  * `loadIdentity()` has run: the environment's identity, the callback URL, session storage and the refresh proxy, the log
- * level, the generated models (`@/models`, rewritten by `pnpm codegen`
+ * level, the app's `package.json` version (`appVersion`), the generated models (`@/models`, rewritten by `pnpm codegen`
  * from `primitive/<env>/db3-types/`), and where db3s are kept on the device
  * (`./storage.ts`).
  */
@@ -112,6 +113,9 @@ export function getJsBaoConfig(): JsBaoClientOptions {
     logLevel: getLogLevel(),
     models: allModels,
     databaseConfig: getDatabaseConfig(),
+    // The app's package.json version, stamped in by vite-plugins/appVersion.ts;
+    // undefined when package.json has none.
+    ...(APP_VERSION ? { appVersion: APP_VERSION } : {}),
   };
 }
 

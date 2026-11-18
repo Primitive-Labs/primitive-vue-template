@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppUpdateBanner from "@/components/shared/AppUpdateBanner.vue";
+import AppUpdateGate from "@/components/shared/AppUpdateGate.vue";
 import { useUserStore } from "@/stores/userStore";
 import { watch } from "vue";
 import { RouterView, useRouter } from "vue-router";
@@ -23,4 +25,6 @@ watch(
 
 <template>
   <RouterView />
+  <AppUpdateBanner />
+  <AppUpdateGate />
 </template>
