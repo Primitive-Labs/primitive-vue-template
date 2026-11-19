@@ -3,5 +3,10 @@
 // it with `primitive config push`, then run `pnpm codegen`.
 
 import type { BaseModel } from "js-bao";
+import { declareDb3Types } from "js-bao";
+
+// Generated with --known-types-only: the client refuses db3 types this app
+// was not generated with (see knownTypesOnly in scripts/codegen.mjs).
+declareDb3Types({ knownTypesOnly: true, types: [] });
 
 export const allModels: Array<typeof BaseModel> = [];

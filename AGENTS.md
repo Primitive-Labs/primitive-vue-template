@@ -42,6 +42,9 @@
 
 - An app's data lives in databases (db3). Declare a type in `primitive/<env>/db3-types/<type>.toml` (beside the project config), push it with `primitive config push`, then run `pnpm codegen`: it generates `src/models/<type>/` (one class per model, plus that type's `allModels`) for every type file of the SELECTED environment, and rewrites `src/models/index.ts`, whose `allModels` the client is initialized with. Import a type's models from `@/models/<type>`. Fetch `primitive guides get databases` for types, records and access.
 - With no types, `src/models/index.ts` exports an empty `allModels`; it is committed, so a fresh checkout type-checks before any codegen. Removing a type file removes its generated directory on the next `pnpm codegen`.
+- To generate only some types (others opened only by server functions), name them in `bao-codegen.json` beside `package.json`: `{ "types": ["notes", "contacts"] }`, each a type file's name without `.toml`. With no file, every type generates. A type left out has its `src/models/<type>/` removed and is unknown to the client (known types only, below). A selected type that names a model through `[type] models` needs the declaring type selected too. Every selected type must exist in each environment the app builds or deploys for, or `pnpm codegen` stops naming it.
+
+Defaults: `pnpm codegen` generates with `--known-types-only` (the `knownTypesOnly` constant in `scripts/codegen.mjs`), so creating or opening a db3 of a type the app does not declare is refused unless the call passes `allowUnknownType: true`; and `primitive init` set `untypedDb3Create = "admins"` in `app.toml`, so always pass a `type` to `client.db3.create`. To turn either off, set the constant to `false`, or remove the `app.toml` line and `primitive config push --only app`.
 
 ### Functions codegen
 

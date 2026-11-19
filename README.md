@@ -132,6 +132,23 @@ src/
 
 Generated files are committed; never edit them. For field options, records and access: `primitive guides get databases`.
 
+### Choosing which types the client generates
+
+`pnpm codegen` generates every type file of the selected environment. When some types are opened only by server functions, name the ones this client uses in a `bao-codegen.json` beside `package.json`:
+
+```json
+{ "types": ["notes", "contacts"] }
+```
+
+A name is a type file's name without `.toml`. The next `pnpm codegen` removes the generated `src/models/<type>/` of every type left out, and the client refuses to create or open a database of one (see [Defaults](#defaults)). Select the type that declares a model a selected type names in `[type] models`, or that model gets no class. Every selected type must exist in each environment the app builds or deploys for: codegen stops on a name with no type file. `{ "types": [] }` generates no models.
+
+### Defaults
+
+Two settings keep the app to the database types it declares:
+
+- **Known types only.** `pnpm codegen` generates with `--known-types-only`, so the client refuses to create or open a database of a type this app was not generated with (`INVALID_ARGUMENT` with `details.reason` `"unknown-type"` on create, `DB3_TYPE_UNKNOWN_TO_CLIENT` on open). Pass `allowUnknownType: true` to let one database through, or set `knownTypesOnly` to `false` at the top of `scripts/codegen.mjs` to turn it off.
+- **Untyped databases for admins.** `primitive init` set `untypedDb3Create = "admins"` on the app, so a member's `client.db3.create` without a `type` is refused with `DB3_CREATE_ROLE_REQUIRED`. Remove the line from `primitive/<env>/app.toml` and run `primitive config push --only app` to let members create untyped databases.
+
 ## Available Scripts
 
 | Script | What it does |
@@ -341,7 +358,8 @@ pnpm child:down feature-x
 that it is the environment it acts on, runs your `scripts/child-app-init`,
 pushes the tree into it, allows `http://localhost:<port>` (default 5173) and
 selects it. Rerun it to resume an interrupted run. `child:down` runs your
-`scripts/child-app-teardown`, then deletes the child and its local state.
+`scripts/child-app-teardown`, then deletes the child and its local state, and
+selects the parent again when the child was selected.
 
 The template ships neither hook: what a fresh child needs is your app's call.
 Add them as executable files:
@@ -355,7 +373,8 @@ Add them as executable files:
   `child:down --skip-teardown` skips the hook and leaves them behind.
 
 Both run from the project root with `PRIMITIVE_ENV` (the child), `CHILD_APP_ID`,
-`CHILD_APP_SLUG` and `PARENT_ENV` set; address the child through
+`CHILD_APP_SLUG` and `PARENT_ENV` set, and the init hook also gets
+`CHILD_APP_PORT` (the `--port` value); address the child through
 `PRIMITIVE_ENV`, not the selected environment. A slug must not be the name of
 a committed environment. See `primitive guides get configuration` ("Child
 apps") for the rest of the workflow.

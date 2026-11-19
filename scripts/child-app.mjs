@@ -20,6 +20,8 @@
  *
  * `down` checks that `--env <localName>` is the child, runs the app's own
  * `scripts/child-app-teardown`, then deletes the child and its local state.
+ * When the child was the selected environment, `down` then selects its
+ * parent, so the next `primitive` command targets the parent app.
  * `--skip-teardown` deletes without running the hook (and without the check),
  * leaving anything the child created outside the platform behind.
  *
@@ -37,7 +39,9 @@
  *                               webhooks). Exiting non-zero keeps the child.
  *
  * Each hook runs from the app root with PRIMITIVE_ENV (the child's local
- * environment name), CHILD_APP_ID, CHILD_APP_SLUG and PARENT_ENV set. Address
+ * environment name), CHILD_APP_ID, CHILD_APP_SLUG and PARENT_ENV set; the init
+ * hook also gets CHILD_APP_PORT, the dev server's port (`--port`, default
+ * 5173), so it can write the child's own dev origin before the push. Address
  * the child through PRIMITIVE_ENV (or `--env`), never through the selected
  * environment: a hook may change the selection, and this script does not rely
  * on it afterwards. Every `primitive` call made after a hook names its
@@ -324,7 +328,13 @@ async function up({ slug, port }) {
   await verifyIdentity(slug, slug, appId, "No hook ran and nothing was pushed.");
 
   // ---- App setup: scripts/child-app-init (see the header). ----
-  const hookEnv = { PRIMITIVE_ENV: slug, CHILD_APP_ID: appId, CHILD_APP_SLUG: slug, PARENT_ENV: parent };
+  const hookEnv = {
+    PRIMITIVE_ENV: slug,
+    CHILD_APP_ID: appId,
+    CHILD_APP_SLUG: slug,
+    PARENT_ENV: parent,
+    CHILD_APP_PORT: String(port),
+  };
   const ranInit = await runHook(
     INIT_HOOK,
     hookEnv,
@@ -397,7 +407,14 @@ async function down({ slug, skipTeardown }) {
   const remove = ["--env", parent, "apps", "children", "delete", slug, "--yes"];
   if ((await run(remove)) !== 0) fail(`'primitive ${remove.join(" ")}' failed.`);
   say(`Deleted the child "${slug}" (${child.appId}).`);
-  if (child.selected) say(`"${slug}" was selected; run 'primitive env use ${parent}' to select its parent.`);
+  // Deleting the selected child clears the selection, and a cleared selection
+  // falls back to the committed default, which need not be the parent.
+  if (child.selected) {
+    if ((await run(["env", "use", parent])) !== 0) {
+      fail(`'primitive env use ${parent}' failed. Run it again to select the parent.`);
+    }
+    say(`"${slug}" was selected; its parent "${parent}" is selected now.`);
+  }
 }
 
 const args = parseArgs(process.argv.slice(2));
