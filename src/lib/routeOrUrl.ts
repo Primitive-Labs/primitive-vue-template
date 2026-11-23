@@ -1,6 +1,3 @@
-import type { Router } from "vue-router";
-import { appBaseLogger } from "./logger";
-
 /**
  * Describes a navigation target that can be expressed either as a
  * named Vue Router route or as a raw URL string.
@@ -30,24 +27,4 @@ export function buildRouteOrUrl(url?: string, routeName?: string): RouteOrUrl {
   }
 
   return hasRouteName ? { routeName } : { url: url as string };
-}
-
-/**
- * Resolve a `RouteOrUrl` value into a concrete href string using the
- * provided Vue Router instance.
- */
-export function resolveRouteOrUrl(router: Router, target: RouteOrUrl): string {
-  const logger = appBaseLogger.forScope("resolveRouteOrUrl");
-
-  if ("routeName" in target) {
-    try {
-      const resolved = router.resolve({ name: target.routeName });
-      return resolved.href;
-    } catch (error) {
-      logger.error("Failed to resolve route", target.routeName, error);
-      throw new Error(`Failed to resolve route "${target.routeName}".`);
-    }
-  }
-
-  return target.url;
 }

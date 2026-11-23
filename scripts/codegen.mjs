@@ -1,160 +1,332 @@
 #!/usr/bin/env node
 /**
- * Regenerate the typed database and workflow surfaces from this app's SYNCED
- * server config — the committed `primitive/<env>/` tree.
+ * Regenerate this app's generated code from its configuration tree — the
+ * committed `primitive/<env>/` of the environment the CLI would use:
  *
- * Why a script and not a shell one-liner in `package.json`: the tree sits
- * beside `primitive/config.json`, and that config is not always in this
- * directory. One Primitive app can have several clients (a web client and a
- * native client in sibling directories), in which case the project config and
- * its export live at the REPO ROOT and this package is one client inside
- * it. A client-relative `ls primitive/*​/…` guard never matches there,
- * so both codegens were skipped silently and every build compiled whatever
- * generated code happened to be in the tree.
+ *   - `functions/*.toml` → `primitive functions codegen`, the typed client
+ *     invokers in `src/types/generated/functions/`. It also runs for db3
+ *     types beside `schemas/` defs, functions or not: a db3 field that refs a
+ *     `schemas/` object def (a JSON field) is typed from the
+ *     `schema-defs.generated.ts` it writes there;
+ *   - `db3-types/<type>.toml` → `js-bao-codegen-v2`, one `src/models/<type>/`
+ *     per type, and `src/models/index.ts`, the barrel whose `allModels` the
+ *     client is initialized with. With no types the barrel exports an empty
+ *     list (the file the template commits, byte for byte). When the
+ *     schema-defs module is there, each run gets `--schema-defs-import`
+ *     naming it.
  *
- * So: walk up to the nearest `primitive/config.json` (the way git finds
- * `.git`, and the way the CLI itself resolves the project) and glob the
- * tree beside it. A standalone scaffold's nearest ancestor is itself, which is
- * exactly the old behavior.
+ * Which types generate models: every type file of the environment, unless a
+ * `bao-codegen.json` beside this client's `package.json` names them:
  *
- * The `primitive` commands are still run FROM THIS DIRECTORY: the output paths
- * are client-relative, and the CLI resolves the project root on its own.
+ *   { "types": ["notes", "contacts"] }
  *
- * The guard is scoped to ONE environment (#3078). It used to answer "does any
- * environment have this class synced?", while the CLI it then invokes resolves
- * exactly one — PRIMITIVE_ENV, then this machine's `primitive env use`
- * selection, then `defaultEnvironment`, then a sole environment — and errors
- * when that one's directory is empty. An app with workflows synced under
- * `alpha` while `dev` is selected therefore failed `pnpm dev`, `pnpm build` and
- * `pnpm test` alike. So ask the same question the CLI will.
+ * A name is a type file's name without `.toml`, looked up in the selected
+ * environment's `db3-types/`. `{}` generates every type; `[]`, none. An
+ * unselected type's generated `src/models/<type>/` is removed like a deleted
+ * type's. A name with no type file, or a file of any other shape, stops
+ * codegen before it runs or writes anything.
  *
- * Node builtins only — this runs before `pnpm install` has any say.
+ * The environment is resolved by `resolvePrimitiveEnv` from
+ * `primitive-admin/vite`, the CLI's own resolver: PRIMITIVE_ENV, then this
+ * machine's `primitive env use` selection, then `defaultEnvironment`, then a
+ * sole environment, walking up to the nearest `primitive/config.json` (one app
+ * with several clients keeps it at the repository root). No config anywhere is
+ * a scaffold that is not a project yet: nothing to generate.
+ *
+ * Commands run FROM THIS DIRECTORY: the output paths are client-relative, and
+ * `pnpm codegen` puts this package's `js-bao-codegen-v2` on PATH.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
-/** The nearest ancestor directory (starting at `from`) that holds a project config. */
-function findProjectRoot(from) {
-  let dir = resolve(from);
-  for (;;) {
-    if (existsSync(join(dir, "primitive", "config.json"))) return dir;
-    const parent = dirname(dir);
-    // Stop at the filesystem root rather than looping forever.
-    if (parent === dir) return null;
-    dir = parent;
-  }
+/**
+ * Generate with `--known-types-only`: the client refuses to create or open a
+ * db3 of a type this app was not generated with (or archived in it). Set it
+ * to `false` to let the app use any type the server has.
+ */
+const knownTypesOnly = true;
+
+const SELECTION_FILE = "bao-codegen.json";
+const SELECTION_SHAPE = '{ "types": ["<db3 type name>", ...] }';
+const MODELS_DIR = join("src", "models");
+const BARREL = join(MODELS_DIR, "index.ts");
+const FUNCTIONS_OUT = "src/types/generated/functions";
+/** What `primitive functions codegen` writes when a db3 field refs a `schemas/` object def. */
+const SCHEMA_DEFS_MODULE = join(FUNCTIONS_OUT, "schema-defs.generated.ts");
+
+/**
+ * The barrel's known-types lines: with `knownTypesOnly`, the setting is
+ * declared even before any type exists, so a typed create is refused on the
+ * device until the type is generated.
+ */
+const KNOWN_TYPES_IMPORT = knownTypesOnly ? `import { declareDb3Types } from "js-bao";\n` : "";
+const KNOWN_TYPES_DECLARATION = knownTypesOnly
+  ? `\n// Generated with --known-types-only: the client refuses db3 types this app
+// was not generated with (see knownTypesOnly in scripts/codegen.mjs).
+declareDb3Types({ knownTypesOnly: true, types: [] });
+`
+  : "";
+
+/** The barrel with no db3 types: the file the template commits. */
+const EMPTY_BARREL = `// Generated by \`pnpm codegen\` from primitive/<env>/db3-types/ — do not edit.
+// This app declares no db3 types yet: put a type file in that directory, push
+// it with \`primitive config push\`, then run \`pnpm codegen\`.
+
+import type { BaseModel } from "js-bao";
+${KNOWN_TYPES_IMPORT}${KNOWN_TYPES_DECLARATION}
+export const allModels: Array<typeof BaseModel> = [];
+`;
+
+/** A POSIX relative path from `fromDir` to `to`. */
+function posixRelative(fromDir, to) {
+  return relative(fromDir, to).split(sep).join("/");
 }
 
-/** Directory names inside `dir`, or `[]` when it does not exist. */
-function subdirectories(dir) {
+/** The `.toml` files directly in `dir`, sorted, or `[]` when there is none. */
+function tomlFiles(dir) {
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".toml"))
+      .sort();
   } catch {
     return [];
   }
 }
 
-/** A JSON object at `path`, or `null` when it is missing or unreadable. */
-function readJson(path) {
-  try {
-    const value = JSON.parse(readFileSync(path, "utf-8"));
-    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
+/** Print a `bao-codegen.json` error with the expected shape, and exit 1. */
+function selectionError(message) {
+  console.error(`Error: ${SELECTION_FILE} ${message}`);
+  console.error(`  Expected ${SELECTION_SHAPE}, or no file to generate every type.`);
+  process.exit(1);
 }
 
 /**
- * The environment the CLI itself will resolve, or `null` when no single one
- * can be determined.
- *
- * The order is the CLI's: PRIMITIVE_ENV, then `.primitive/local.json` (written
- * by `primitive env use`), then the committed `defaultEnvironment`, then a sole
- * environment. A selection naming an undefined environment resolves to nothing
- * here on purpose — the CLI reports that properly, with the available names.
+ * The db3 types `bao-codegen.json` in this directory selects: sorted, each
+ * once. Null when there is no file or it has no `types` (every type).
  */
-function resolveSelection(projectRoot) {
-  const config = readJson(join(projectRoot, "primitive", "config.json"));
-  if (!config) return null;
-  const environments = config.environments;
-  if (!environments || typeof environments !== "object") return null;
-
-  const local = readJson(join(projectRoot, ".primitive", "local.json")) ?? {};
-  const selected =
-    typeof local.selectedEnvironment === "string" && local.selectedEnvironment
-      ? local.selectedEnvironment
-      : null;
-
-  const names = Object.keys(environments);
-  const candidate =
-    process.env.PRIMITIVE_ENV || selected || config.defaultEnvironment || null;
-
-  const name = candidate ?? (names.length === 1 ? names[0] : null);
-  if (!name || !Object.prototype.hasOwnProperty.call(environments, name)) return null;
-
-  return { name };
-}
-
-/** True when `<treeRoot>/<env>/<kind>/` holds at least one `.toml`. */
-function kindHasToml(treeRoot, env, kind) {
+function readTypeSelection() {
+  if (!existsSync(SELECTION_FILE)) return null;
+  let value;
   try {
-    return readdirSync(join(treeRoot, env, kind)).some((name) =>
-      name.endsWith(".toml"),
-    );
-  } catch {
-    // No such directory for this environment — nothing synced.
-    return false;
+    value = JSON.parse(readFileSync(SELECTION_FILE, "utf-8"));
+  } catch (error) {
+    selectionError(`is not valid JSON (${error.message}).`);
   }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    selectionError("must hold a JSON object.");
+  }
+  const unknown = Object.keys(value).filter((key) => key !== "types");
+  if (unknown.length > 0) {
+    selectionError(`has unknown key ${unknown.map((key) => JSON.stringify(key)).join(", ")}.`);
+  }
+  if (!("types" in value)) return null;
+  const { types } = value;
+  if (!Array.isArray(types) || types.some((name) => typeof name !== "string" || name.length === 0)) {
+    selectionError('"types" must be an array of db3 type names (non-empty strings).');
+  }
+  return [...new Set(types)].sort();
 }
 
-/**
- * True when the SELECTED environment has `kind` synced.
- *
- * One deliberate fallback: when no single environment resolves at all —
- * several defined, none selected — the guard widens back to every environment,
- * so an app that really does have TOMLs invokes the CLI and gets the CLI's own
- * resolver error rather than a silent skip of work the developer asked for.
- * `primitive/config.json` is not a directory, so it is never read as an env.
- */
-function hasSyncedToml(treeRoot, kind, selection) {
-  const environments = selection ? [selection.name] : subdirectories(treeRoot);
-  for (const env of environments) {
-    if (kindHasToml(treeRoot, env, kind)) return true;
-  }
-  return false;
-}
-
-/** Run a `primitive` subcommand from this client directory; exit on failure. */
-function runPrimitive(args) {
-  const result = spawnSync("primitive", args, { stdio: "inherit", shell: false });
+/** Run a command from this client directory; exit with its failure. */
+function run(command, args, missingHint) {
+  const result = spawnSync(command, args, { stdio: "inherit", shell: false });
   if (result.error) {
     console.error(
-      `Error: could not run \`primitive ${args.join(" ")}\`: ${result.error.message}`,
+      `Error: could not run \`${command} ${args.join(" ")}\`: ${result.error.message}`
     );
-    console.error(
-      "  Install the CLI with: pnpm add -g primitive-admin   (or: npm install -g primitive-admin)",
-    );
+    console.error(`  ${missingHint}`);
     process.exit(1);
   }
-  // Propagate the failure the way the old `&&` chain did.
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-// No config anywhere is a scaffold that is not a project yet: nothing to
-// generate, and nothing to fail about.
-const projectRoot = findProjectRoot(process.cwd());
-if (projectRoot) {
-  const treeRoot = join(projectRoot, "primitive");
-  const selection = resolveSelection(projectRoot);
+/**
+ * Whether a project config is in reach: `PRIMITIVE_PROJECT_CONFIG`, or a
+ * `primitive/config.json` in this directory or an ancestor. Checked before
+ * the resolver is loaded, so a checkout that is not a project yet needs no
+ * installed dependencies to get through codegen.
+ */
+function projectConfigInReach() {
+  const override = process.env.PRIMITIVE_PROJECT_CONFIG;
+  if (override && existsSync(override)) return true;
+  let dir = resolve(process.cwd());
+  for (;;) {
+    if (existsSync(join(dir, "primitive", "config.json"))) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
 
-  if (hasSyncedToml(treeRoot, "database-type-configs", selection)) {
-    runPrimitive(["databases", "codegen", "-o", "src/types/generated"]);
+/** The environment the CLI would use, or null when this is not a project yet. */
+async function resolveEnvironment() {
+  if (!projectConfigInReach()) return null;
+  let vite;
+  try {
+    vite = await import("primitive-admin/vite");
+  } catch (error) {
+    console.error(
+      `Error: could not load primitive-admin/vite (${error.message}). Run \`pnpm install\`.`
+    );
+    process.exit(1);
+  }
+  try {
+    return vite.resolvePrimitiveEnv({ root: process.cwd() });
+  } catch (error) {
+    if (error instanceof vite.PrimitiveEnvError) {
+      if (error.kind === "missing-config") return null;
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/** A type name as an identifier: `team-notes` → `teamNotes`. */
+function identifierFor(type) {
+  const words = type.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const name = words
+    .map((word, i) =>
+      i === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1)
+    )
+    .join("");
+  return /^[0-9]/.test(name) ? `_${name}` : name;
+}
+
+/**
+ * One import alias per type, distinct even when two type names camel-case
+ * alike (`team-notes` and `team_notes` are both `teamNotes`): the second and
+ * later such types get their ordinal appended. `types` is sorted, so the
+ * aliases are stable across runs.
+ */
+function aliasesFor(types) {
+  const seen = new Map();
+  return types.map((type) => {
+    const base = identifierFor(type);
+    const ordinal = (seen.get(base) ?? 0) + 1;
+    seen.set(base, ordinal);
+    return `${base}${ordinal === 1 ? "" : ordinal}Models`;
+  });
+}
+
+/** The barrel aggregating each generated type's `allModels`. */
+function barrelFor(types) {
+  if (types.length === 0) return EMPTY_BARREL;
+  const aliases = aliasesFor(types);
+  const imports = types
+    .map((type, i) => `import { allModels as ${aliases[i]} } from "./${type}";`)
+    .join("\n");
+  const spread = aliases.map((alias) => `  ...${alias},`).join("\n");
+  return `// Generated by \`pnpm codegen\` from primitive/<env>/db3-types/ — do not edit.
+// One directory per db3 type: import a type's models from \`@/models/<type>\`.
+
+import type { BaseModel } from "js-bao";
+${KNOWN_TYPES_IMPORT}${imports}
+${KNOWN_TYPES_DECLARATION}
+export const allModels: Array<typeof BaseModel> = [
+${spread}
+];
+`;
+}
+
+/** Remove `src/models/<dir>/` left by a type that is gone (only generated ones). */
+function removeStaleModelDirs(types) {
+  let entries;
+  try {
+    entries = readdirSync(MODELS_DIR, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || types.includes(entry.name)) continue;
+    const dir = join(MODELS_DIR, entry.name);
+    const generated = readdirSync(dir).some((name) =>
+      name.endsWith(".generated.ts")
+    );
+    if (generated) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const environment = await resolveEnvironment();
+if (environment) {
+  const tree = join(environment.projectRoot, "primitive", environment.tree);
+
+  // The types to generate, settled before anything runs or is written.
+  const typesDir = join(tree, "db3-types");
+  const available = tomlFiles(typesDir).map((name) =>
+    name.slice(0, -".toml".length)
+  );
+  const selection = readTypeSelection();
+  if (selection) {
+    const missing = selection.filter((name) => !available.includes(name));
+    if (missing.length > 0) {
+      const where = posixRelative(process.cwd(), typesDir) || ".";
+      for (const name of missing) {
+        console.error(
+          `Error: ${SELECTION_FILE} selects db3 type ${JSON.stringify(name)}, but ${where}/ has no type file of that name.`
+        );
+      }
+      console.error(
+        `  The types in ${where}/: ${available.length > 0 ? available.join(", ") : "(none)"}.` +
+          ` A name is a type file's name without .toml.`
+      );
+      process.exit(1);
+    }
+  }
+  const types = selection ?? available;
+
+  // A JSON field refs a `schemas/` def, so db3 types beside `schemas/` files
+  // may need the schema-defs module; a module already there may need sweeping.
+  const jsonFieldsPossible =
+    types.length > 0 && tomlFiles(join(tree, "schemas")).length > 0;
+  if (
+    tomlFiles(join(tree, "functions")).length > 0 ||
+    jsonFieldsPossible ||
+    existsSync(SCHEMA_DEFS_MODULE)
+  ) {
+    run(
+      "primitive",
+      ["functions", "codegen", "-o", FUNCTIONS_OUT],
+      "Install the CLI with: pnpm add -g primitive-admin   (or: npm install -g primitive-admin)"
+    );
   }
 
-  if (hasSyncedToml(treeRoot, "workflows", selection)) {
-    runPrimitive(["workflows", "codegen", "-o", "src/types/generated/workflows"]);
+  const schemaDefs = existsSync(SCHEMA_DEFS_MODULE);
+  for (const type of types) {
+    const input = join(typesDir, `${type}.toml`);
+    const output = join(MODELS_DIR, type);
+    run(
+      "js-bao-codegen-v2",
+      [
+        "-i",
+        posixRelative(process.cwd(), input),
+        "-o",
+        output.split(sep).join("/"),
+        // The generated barrel imports the type file in place (`?raw`).
+        "--schema-import",
+        posixRelative(output, input),
+        // A JSON field's model is typed from the module, by this specifier.
+        ...(schemaDefs
+          ? [
+              "--schema-defs-import",
+              posixRelative(output, SCHEMA_DEFS_MODULE).replace(/\.ts$/, ""),
+            ]
+          : []),
+        ...(knownTypesOnly ? ["--known-types-only"] : []),
+      ],
+      "Run `pnpm install`, then run codegen as `pnpm codegen` (it puts js-bao-codegen-v2 on PATH)."
+    );
   }
+
+  removeStaleModelDirs(types);
+  const barrel = barrelFor(types);
+  const current = existsSync(BARREL) ? readFileSync(BARREL, "utf-8") : null;
+  if (current !== barrel) writeFileSync(BARREL, barrel);
 }

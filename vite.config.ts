@@ -3,12 +3,28 @@ import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import vue from "@vitejs/plugin-vue";
 import vueJsx from "@vitejs/plugin-vue-jsx";
-import { primitiveDevTools, primitiveEnv } from "primitive-app/vite";
+import { primitiveEnv } from "primitive-admin/vite";
 import { defineConfig } from "vite";
 import vueDevTools from "vite-plugin-vue-devtools";
 
+import { appVersion } from "./vite-plugins/appVersion.ts";
+import {
+  HOSTED_BUILD_LINE,
+  HOSTED_EMPTY_IDENTITY,
+  HOSTED_MODE,
+  hostedBuild,
+} from "./vite-plugins/hostedBuild.ts";
+import { sqlJsNodeBuiltins } from "./vite-plugins/sqlJsNodeBuiltins.ts";
+
 // https://vite.dev/config/
-export default defineConfig(() => {
+export default defineConfig(({ command, mode }) => {
+  // A hosted build (`pnpm build:hosted`) carries no app identity: it reads it
+  // at start-up from /__primitive/config.json on the origin Primitive hosting
+  // serves it from (src/config/hostedConfig.ts). So primitiveEnv() is not
+  // registered, and the identity keys are defined empty.
+  const hosted = mode === HOSTED_MODE;
+  if (hosted && command === "build") console.log(HOSTED_BUILD_LINE);
+
   // The Primitive environment (backend URL + app ID) is resolved by this
   // plugin from primitive/config.json — the one place it is typed. Select it
   // with `primitive env use <name>`, or `--primitive-env` on a deploy.
@@ -17,31 +33,30 @@ export default defineConfig(() => {
   // this file: an eager call here would throw before the plugin's escape hatch
   // (an app whose VITE_APP_ID / VITE_API_URL come straight from the
   // environment, e.g. in CI) could apply.
-  const primitive = primitiveEnv();
-
   return {
     plugins: [
       vue(),
       vueJsx(),
       vueDevTools(),
       tailwindcss(),
-      primitive,
-      primitiveDevTools({
-        // A thunk, so the label follows whatever the plugin resolved (or an
-        // explicit VITE_APP_NAME override) rather than a value read too early.
-        appName: () => primitive.appName() || "Primitive Template App",
-        testsDir: "src/tests",
-        keyboardShortcut: "cmd+shift+l",
-      }),
+      ...(hosted ? [hostedBuild()] : [primitiveEnv()]),
+      // sql.js (the in-browser database engine) requires fs, path and crypto
+      // on its Node branch only; keep them out of the browser bundle.
+      sqlJsNodeBuiltins(),
+      // Stamps package.json's version into the client (appVersion) and writes
+      // version.json beside the bundle for the update banner. Stops the build
+      // on a version the client would refuse.
+      appVersion(),
     ],
+    ...(hosted ? { define: HOSTED_EMPTY_IDENTITY } : {}),
     build: {
-      // The Primitive client + Vue runtime baseline is ~1.35 MB minified
-      // (~385 kB gzip), so Vite's generic 500 kB chunk advisory always fires
+      // The Primitive client + Vue runtime baseline is ~1.73 MB minified
+      // (~492 kB gzip), so Vite's generic 500 kB chunk advisory always fires
       // on a fresh scaffold. Calibrate the threshold just above that baseline
       // — the advisory stays useful for real app-side bloat. As your app
       // grows, prefer code-splitting (dynamic import() per route) over
       // raising this further.
-      chunkSizeWarningLimit: 1500,
+      chunkSizeWarningLimit: 1800,
     },
     resolve: {
       alias: {

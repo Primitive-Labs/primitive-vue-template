@@ -10,14 +10,17 @@
  * The user is already authenticated by the time they reach here — the route
  * requires sign-in, so the router guard sends signed-out visitors to login.
  * Sign-in context is passed via query params so it survives a page refresh:
- *   - `continueURL`      where to go once onboarding is complete
+ *   - `continueURL`      where to go once onboarding is complete (else "/")
  *   - `isNewUser`        "1" if this is the user's first sign-in
  *   - `promptAddPasskey` "1" if the server asked us to prompt for a passkey
+ *
+ * A new user gives a name (required) and, optionally, a photo; a returning
+ * user goes straight on. Where the app offers passkeys, a new user is then
+ * asked to add one. Change what onboarding asks for here, in plain code.
  */
 import { startRegistration } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/browser";
 import { Camera, Key, Loader2, User, X } from "@lucide/vue";
-import type { Component } from "vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { appBaseLogger } from "@/lib/logger";
@@ -36,75 +39,21 @@ type OnboardingState =
   | "passkey-error"
   | "redirecting";
 
-interface Props {
-  /**
-   * Absolute/path URL to continue to when onboarding is complete. Used only as
-   * a fallback when no `continueURL` query param is present.
-   * Either `continueURL` or `continueRoute` should be provided.
-   */
-  continueURL?: string;
-  /**
-   * Named route to continue to when onboarding is complete. Used only as a
-   * fallback when no `continueURL` query param is present.
-   * Either `continueURL` or `continueRoute` should be provided.
-   */
-  continueRoute?: string;
-  /**
-   * Optional loading component to display while onboarding is processing.
-   * Defaults to `PrimitiveLogoSpinner` when not provided.
-   */
-  loadingComponent?: Component;
-
-  // Profile completion options
-  /**
-   * Whether to show the name field if user.name is blank.
-   * @default true
-   */
-  requestName?: boolean;
-  /**
-   * Whether name is required before continuing.
-   * @default false
-   */
-  requireName?: boolean;
-  /**
-   * Whether to show the avatar field if user.avatarUrl is blank.
-   * @default true
-   */
-  requestAvatar?: boolean;
-  /**
-   * Whether avatar is required before continuing.
-   * @default false
-   */
-  requireAvatar?: boolean;
-
-  // Passkey prompt options
-  /**
-   * Whether to prompt user to add a passkey if they have none.
-   * @default true
-   */
-  promptForPasskey?: boolean;
-}
-
-const props = withDefaults(defineProps<Props>(), {
-  promptForPasskey: true,
-  requestName: true,
-  requireName: false,
-  requestAvatar: true,
-  requireAvatar: false,
-});
-
 const user = useUserStore();
 const router = useRouter();
 const route = useRoute();
 const logger = appBaseLogger.forScope("PrimitiveOnboarding");
 
-// Profile config from props
-const effectiveConfig = computed(() => ({
-  requestName: props.requestName,
-  requireName: props.requireName,
-  requestAvatar: props.requestAvatar,
-  requireAvatar: props.requireAvatar,
-}));
+/** What onboarding asks a new user for. */
+const profileFields = {
+  requestName: true,
+  requireName: true,
+  requestAvatar: true,
+  requireAvatar: false,
+} as const;
+
+/** Whether a new user is asked to add a passkey, where the app offers them. */
+const PROMPT_FOR_PASSKEY = true;
 
 // State
 const onboardingState = ref<OnboardingState>("processing");
@@ -127,26 +76,14 @@ const passkeyError = ref<string | null>(null);
 const authConfig = computed(() => user.authConfig);
 
 /**
- * Where to send the user once onboarding is complete. Prefers the
- * `continueURL` query param (set by the sign-in method that routed here),
- * then the `continueURL` / `continueRoute` props, then "/".
+ * Where to send the user once onboarding is complete: the `continueURL` query
+ * param (set by the sign-in method that routed here), else "/".
  */
 const redirectTo = computed(() => {
   const fromQuery = route.query.continueURL;
-  if (typeof fromQuery === "string" && fromQuery.length > 0) {
-    return fromQuery;
-  }
-  if (props.continueURL) {
-    return props.continueURL;
-  }
-  if (props.continueRoute) {
-    try {
-      return router.resolve({ name: props.continueRoute }).href;
-    } catch {
-      // Error is logged in onMounted validation; fall through to default
-    }
-  }
-  return "/";
+  return typeof fromQuery === "string" && fromQuery.length > 0
+    ? fromQuery
+    : "/";
 });
 
 /**
@@ -155,7 +92,7 @@ const redirectTo = computed(() => {
  */
 function checkNeedsProfileCompletion(forNewUser: boolean): boolean {
   const currentUser = user.currentUser;
-  const config = effectiveConfig.value;
+  const config = profileFields;
 
   if (!currentUser) {
     return false;
@@ -175,21 +112,13 @@ const canContinueProfile = computed(() => {
 
   // Check name requirement
   const nameBlank = !currentUser?.name || currentUser.name.trim() === "";
-  if (
-    effectiveConfig.value.requireName &&
-    nameBlank &&
-    !userName.value.trim()
-  ) {
+  if (profileFields.requireName && nameBlank && !userName.value.trim()) {
     return false;
   }
 
   // Check avatar requirement
   const avatarBlank = !currentUser?.avatarUrl;
-  if (
-    effectiveConfig.value.requireAvatar &&
-    avatarBlank &&
-    !userAvatarFile.value
-  ) {
+  if (profileFields.requireAvatar && avatarBlank && !userAvatarFile.value) {
     return false;
   }
 
@@ -198,7 +127,7 @@ const canContinueProfile = computed(() => {
 
 // Computed to check if we should show the name field
 const showNameField = computed(() => {
-  if (!effectiveConfig.value.requestName) return false;
+  if (!profileFields.requestName) return false;
   // For new users, always show the name field so they can customize it
   if (isNewUser.value) return true;
   // For existing users, only show if blank
@@ -208,7 +137,7 @@ const showNameField = computed(() => {
 
 // Computed to check if we should show the avatar field
 const showAvatarField = computed(() => {
-  if (!effectiveConfig.value.requestAvatar) return false;
+  if (!profileFields.requestAvatar) return false;
   // For new users, always show the avatar field so they can set it
   if (isNewUser.value) return true;
   // For existing users, only show if blank
@@ -284,7 +213,7 @@ function finish(): void {
 async function checkShouldPromptPasskey(
   serverPromptAddPasskey?: boolean
 ): Promise<boolean> {
-  if (!props.promptForPasskey) return false;
+  if (!PROMPT_FOR_PASSKEY) return false;
   if (!authConfig.value?.hasPasskey) return false;
 
   // Only prompt new users - returning users who skipped won't be prompted again
@@ -482,27 +411,8 @@ function retryPasskey(): void {
   passkeyError.value = null;
 }
 
-// Validation helpers
-function validateRouteExists(routeName: string, propName: string): boolean {
-  try {
-    router.resolve({ name: routeName });
-    return true;
-  } catch {
-    logger.error(
-      `Invalid ${propName}: route "${routeName}" does not exist. ` +
-        `Check that the route is defined in your router configuration.`
-    );
-    return false;
-  }
-}
-
 // Lifecycle
 onMounted(() => {
-  // Validate route props early to catch configuration errors
-  if (props.continueRoute) {
-    validateRouteExists(props.continueRoute, "continueRoute");
-  }
-
   // runOnboarding catches every error itself and finishes to the continue URL.
   void runOnboarding();
 });
@@ -514,7 +424,7 @@ onMounted(() => {
     v-if="onboardingState === 'processing' || onboardingState === 'redirecting'"
     class="min-h-screen flex items-center justify-center"
   >
-    <component :is="props.loadingComponent || PrimitiveLogoSpinner" />
+    <PrimitiveLogoSpinner />
   </div>
 
   <!-- Profile Completion State -->
@@ -539,7 +449,7 @@ onMounted(() => {
         <div v-if="showNameField" class="space-y-2">
           <Label for="name">
             Your name
-            <span v-if="effectiveConfig.requireName" class="text-destructive"
+            <span v-if="profileFields.requireName" class="text-destructive"
               >*</span
             >
           </Label>
@@ -558,7 +468,7 @@ onMounted(() => {
         <div v-if="showAvatarField" class="space-y-2">
           <Label>
             Profile picture
-            <span v-if="effectiveConfig.requireAvatar" class="text-destructive"
+            <span v-if="profileFields.requireAvatar" class="text-destructive"
               >*</span
             >
             <span v-else class="text-muted-foreground text-sm">(optional)</span>

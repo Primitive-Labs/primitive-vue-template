@@ -4,7 +4,7 @@
  *
  * This component is controlled via v-model:open or the open prop.
  * It uses a Dialog on desktop and a bottom Sheet on mobile.
- * Fields shown are controlled by the profileConfig prop.
+ * The fields it shows and requires are `profileFields` below.
  */
 import { useMediaQuery } from "@vueuse/core";
 import { Camera, Check, Loader2, X } from "@lucide/vue";
@@ -33,39 +33,23 @@ const isMobile = useMediaQuery("(max-width: 768px)");
 
 type EditState = "idle" | "saving" | "success" | "error";
 
-/**
- * Configuration for which profile fields to show/require.
- */
-export interface ProfileConfig {
-  /** Whether to show the name field */
-  requestName?: boolean;
-  /** Whether name is required before saving */
-  requireName?: boolean;
-  /** Whether to show the avatar field */
-  requestAvatar?: boolean;
-  /** Whether avatar is required before saving */
-  requireAvatar?: boolean;
-}
+/** Which profile fields the editor shows, and which it requires. */
+const profileFields = {
+  requestName: true,
+  requireName: false,
+  requestAvatar: true,
+  requireAvatar: false,
+} as const;
 
 interface Props {
   /**
    * Whether the dialog is open.
    */
   open?: boolean;
-  /**
-   * Profile editing configuration.
-   */
-  profileConfig?: ProfileConfig;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   open: false,
-  profileConfig: () => ({
-    requestName: true,
-    requireName: false,
-    requestAvatar: true,
-    requireAvatar: false,
-  }),
 });
 
 interface Emits {
@@ -94,18 +78,18 @@ const dialogOpen = computed({
   },
 });
 
-const showNameField = computed(() => props.profileConfig.requestName);
-const showAvatarField = computed(() => props.profileConfig.requestAvatar);
+const showNameField = computed(() => profileFields.requestName);
+const showAvatarField = computed(() => profileFields.requestAvatar);
 
 const canSave = computed(() => {
   // Check name requirement
-  if (props.profileConfig.requireName && !userName.value.trim()) {
+  if (profileFields.requireName && !userName.value.trim()) {
     return false;
   }
 
   // Check avatar requirement - only if no existing avatar and no new file
   if (
-    props.profileConfig.requireAvatar &&
+    profileFields.requireAvatar &&
     !user.currentUser?.avatarUrl &&
     !userAvatarFile.value
   ) {
@@ -279,9 +263,7 @@ function handleClose(): void {
         <div v-if="showNameField" class="space-y-2">
           <Label for="edit-name">
             Name
-            <span
-              v-if="props.profileConfig.requireName"
-              class="text-destructive"
+            <span v-if="profileFields.requireName" class="text-destructive"
               >*</span
             >
           </Label>
@@ -297,9 +279,7 @@ function handleClose(): void {
         <div v-if="showAvatarField" class="space-y-2">
           <Label>
             Profile picture
-            <span
-              v-if="props.profileConfig.requireAvatar"
-              class="text-destructive"
+            <span v-if="profileFields.requireAvatar" class="text-destructive"
               >*</span
             >
           </Label>
@@ -405,9 +385,7 @@ function handleClose(): void {
         <div v-if="showNameField" class="space-y-2">
           <Label for="edit-name-mobile">
             Name
-            <span
-              v-if="props.profileConfig.requireName"
-              class="text-destructive"
+            <span v-if="profileFields.requireName" class="text-destructive"
               >*</span
             >
           </Label>
@@ -424,9 +402,7 @@ function handleClose(): void {
         <div v-if="showAvatarField" class="space-y-2">
           <Label>
             Profile picture
-            <span
-              v-if="props.profileConfig.requireAvatar"
-              class="text-destructive"
+            <span v-if="profileFields.requireAvatar" class="text-destructive"
               >*</span
             >
           </Label>

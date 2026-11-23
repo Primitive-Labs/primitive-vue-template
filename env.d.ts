@@ -20,6 +20,13 @@ interface ImportMetaEnv {
   readonly VITE_OAUTH_REDIRECT_URI: string;
   readonly VITE_ENABLE_AUTH_PROXY?: string;
   readonly VITE_LOG_LEVEL?: string;
+
+  // Defined at build time by vite-plugins/appVersion.ts — do not author
+  // these in a .env file.
+  /** The app's package.json `version`; empty when it has none. */
+  readonly VITE_APP_VERSION?: string;
+  /** This build's id, also written to version.json; empty in `vite` dev. */
+  readonly VITE_APP_BUILD_ID?: string;
 }
 
 interface ImportMeta {

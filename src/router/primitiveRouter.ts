@@ -15,8 +15,8 @@
  *     `RouteLocationRaw`.
  *
  * The two axes compose: a route can require sign-in, then run an
- * additional check against the signed-in user (e.g. group membership,
- * role, or a custom rule).
+ * additional check against the signed-in user (e.g. a role, or a custom
+ * rule).
  *
  * `authCheck` only runs after the sign-in gate — it never sees an
  * unauthenticated user. A predicate that throws is treated as a
@@ -48,10 +48,6 @@ export interface AuthContext {
   isMember: boolean;
   /** True if the user has the `admin` app role. */
   isAdmin: boolean;
-  /** Whether the user belongs to a specific group. */
-  isMemberOf(groupType: string, groupId: string): boolean;
-  /** All group IDs the user belongs to of a given type. */
-  memberGroups(groupType: string): readonly string[];
   /** Whether the user has the given app role (e.g. "admin", "member"). */
   hasRole(role: string): boolean;
 }
@@ -103,8 +99,6 @@ function buildAuthContext(user: ReturnType<typeof useUserStore>): AuthContext {
     user: profile,
     isMember: true,
     isAdmin: user.isAdmin,
-    isMemberOf: (groupType, groupId) => user.isMemberOf(groupType, groupId),
-    memberGroups: (groupType) => user.memberGroups(groupType),
     hasRole: (role) => profile.appRole === role,
   };
 }
@@ -130,7 +124,7 @@ export function createPrimitiveRouter(
     routes: options.routes,
   });
 
-  router.beforeEach(async (to) => {
+  router.beforeEach((to) => {
     const meta = to.meta.primitiveRouterMeta;
     if (!meta) {
       throw new Error(
@@ -185,13 +179,6 @@ export function createPrimitiveRouter(
 
     // Axis 2: authCheck. Only runs for authenticated users.
     if (authCheck && user.isAuthenticated) {
-      // Memberships load in the background after sign-in. If a route
-      // wants to consult them, wait for the initial load before
-      // evaluating — otherwise predicates would see an empty cache.
-      // Routes without an authCheck never hit this path.
-      if (!user.isMembershipsReady) {
-        await user.whenMembershipsReady();
-      }
       let result: AuthCheckResult;
       try {
         result = authCheck(buildAuthContext(user), to);

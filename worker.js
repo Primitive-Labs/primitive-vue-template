@@ -77,6 +77,18 @@ const findCookieValue = (cookies, name) => {
   return null;
 };
 
+// Logs name a request by origin and path only. The query string can carry an
+// OAuth code or a magic-link token, and headers carry cookies and bearer
+// tokens, so neither is ever written to the Worker's logs.
+const describeUrlForLog = (value) => {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "[unparseable url]";
+  }
+};
+
 const appendVary = (existing, value) => {
   if (!value) return existing || undefined;
   if (!existing) return value;
@@ -233,12 +245,12 @@ const forwardProxyRequest = async ({ request, url, headers }) => {
     init.body = request.body;
   }
   console.log("[WORKER][proxy] Forwarding request", {
-    url,
+    url: describeUrlForLog(url),
     method: request.method,
   });
   const response = await fetch(url, init);
   console.log("[WORKER][proxy] Upstream response", {
-    url,
+    url: describeUrlForLog(url),
     status: response.status,
   });
   return response;
@@ -290,7 +302,7 @@ const handleGenericProxy = async (request, env, config, url) => {
 
   console.log("[WORKER][generic-proxy] Forwarding request", {
     proxyPath,
-    upstreamUrl: upstreamUrl.toString(),
+    upstreamUrl: describeUrlForLog(upstreamUrl.toString()),
     method: request.method,
   });
 
@@ -313,17 +325,22 @@ const handleGenericProxy = async (request, env, config, url) => {
       request,
     });
   } catch (error) {
-    console.error("[WORKER][generic-proxy] upstream error", error);
+    console.error(
+      "[WORKER][generic-proxy] upstream error",
+      error instanceof Error
+        ? `${error.name}: ${error.message.replace(/\?[^\s"']*/g, "")}`
+        : "unknown error"
+    );
     return new Response("Upstream error", { status: 502 });
   }
 };
 
 export default {
   async fetch(request, env) {
-    console.log("[WORKER] Worker started, request:", request.url);
     console.log(
-      "[WORKER] Headers:",
-      Object.fromEntries(request.headers.entries())
+      "[WORKER] Worker started, request:",
+      request.method,
+      describeUrlForLog(request.url)
     );
 
     const url = new URL(request.url);
@@ -412,10 +429,6 @@ export default {
       "[WORKER] Got response from ASSETS:",
       response.status,
       response.headers.get("content-type")
-    );
-    console.log(
-      "[WORKER] Response headers:",
-      Object.fromEntries(response.headers.entries())
     );
 
     return response;

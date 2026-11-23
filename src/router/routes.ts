@@ -2,7 +2,7 @@ import { config } from "@/config/envConfig";
 import AppLayout from "@/layouts/AppLayout.vue";
 import LoginLayout from "@/layouts/LoginLayout.vue";
 import PrimitiveLogout from "@/components/auth/PrimitiveLogout.vue";
-import PrimitiveOauthCallback from "@/components/auth/PrimitiveOauthCallback.vue";
+import PrimitiveSignInCallback from "@/components/auth/PrimitiveSignInCallback.vue";
 import PrimitiveOnboarding from "@/components/auth/PrimitiveOnboarding.vue";
 import { createPrimitiveRouter } from "@/router/primitiveRouter";
 import type { RouteRecordRaw } from "vue-router";
@@ -12,6 +12,8 @@ import InviteAcceptPage from "../pages/InviteAcceptPage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import NotFoundPage from "../pages/NotFoundPage.vue";
 
+// The page an emailed sign-in link or an OAuth redirect opens: the path of
+// the configured callback URL (VITE_OAUTH_REDIRECT_URI).
 const oauthCallbackPath = config.oauthRedirectUri
   ? new URL(config.oauthRedirectUri).pathname
   : "/oauth/callback";
@@ -46,18 +48,12 @@ const routes: RouteRecordRaw[] = [
         path: "logout",
         name: "logout",
         component: PrimitiveLogout,
-        props: { continueRoute: "login" },
         meta: publicRoute,
       },
       {
         path: oauthCallbackPath,
         name: "oauth-callback",
-        component: PrimitiveOauthCallback,
-        props: {
-          continueRoute: "home",
-          loginRoute: "login",
-          onboardingRoute: "onboarding",
-        },
+        component: PrimitiveSignInCallback,
         meta: publicRoute,
       },
       {
@@ -68,14 +64,12 @@ const routes: RouteRecordRaw[] = [
         path: "onboarding",
         name: "onboarding",
         component: PrimitiveOnboarding,
-        props: { continueRoute: "home" },
         meta: signedIn,
       },
       {
         path: "invite/accept",
         name: "invite-accept",
         component: InviteAcceptPage,
-        props: { continueRoute: "home", loginRoute: "login" },
         meta: publicRoute,
       },
     ],

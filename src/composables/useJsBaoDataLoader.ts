@@ -9,8 +9,8 @@ import {
   unref,
   watch,
 } from "vue";
+import { getAppClient } from "../lib/client";
 import { appBaseLogger } from "../lib/logger";
-import { jsBaoClientService } from "primitive-app";
 
 const logger = appBaseLogger.forScope("useJsBaoDataLoader");
 
@@ -26,8 +26,9 @@ export interface UseJsBaoDataLoaderOptions<
   Q extends Record<string, unknown> = Record<string, unknown>,
 > {
   /**
-   * Models to subscribe to for automatic reloads after the first successful load.
-   * Each model is expected to expose a `subscribe(cb) => unsubscribe` API.
+   * Models to subscribe to: a change to any of them reloads. Each exposes
+   * `subscribe(cb) => unsubscribe` (every generated model does, db3 records
+   * included).
    */
   subscribeTo: ModelClass[];
 
@@ -39,10 +40,11 @@ export interface UseJsBaoDataLoaderOptions<
   queryParams: MaybeRefQuery<Q>;
 
   /**
-   * Document readiness gate. While `false`, no loads will run and
-   * `initialDataLoaded` will be reset to `false`.
+   * Readiness gate (e.g. "the db3 this view reads is open"). While `false`,
+   * no loads run, `data` is `null` and `initialDataLoaded` is `false`.
+   * Defaults to `true`.
    */
-  documentReady: MaybeRefBoolean;
+  ready?: MaybeRefBoolean;
 
   /**
    * The actual data loading function. Receives the current query params directly.
@@ -50,18 +52,20 @@ export interface UseJsBaoDataLoaderOptions<
   loadData: (queryParams: Q | null) => Promise<Data>;
 
   /**
-   * Optional per-instance pause flag. While true, no loads or scheduled
-   * reloads will run.
+   * Optional per-instance pause flag. While true, no loads run. A reload asked
+   * for while paused (a model change, a db3 event, a query change, `reload()`)
+   * is kept, and runs once when the flag goes back to false.
    */
   pauseUpdates?: MaybeRefBoolean;
 
   /**
-   * Whether to reload when the js-bao client emits documentLoaded or
-   * documentClosed events. This handles cases where available data changes
-   * due to documents syncing from server or being closed.
+   * Whether to reload when the app client reports that a db3 became ready
+   * (`db3:ready`), was deleted or lost (`db3:gone`), or was evicted from the
+   * local cache (`db3:evicted`): the records a view can read changed without
+   * a model change.
    * @default true
    */
-  reloadOnDocumentEvents?: MaybeRefBoolean;
+  reloadOnDb3Events?: MaybeRefBoolean;
 
   /**
    * Debounce delay (ms) for scheduled reloads.
@@ -72,7 +76,7 @@ export interface UseJsBaoDataLoaderOptions<
    * Delay (ms) before `showSkeleton` flips to `true` while data is still
    * loading. If the load completes before this delay, the skeleton never
    * shows — useful to avoid skeleton flashes on warm SPA navigations where
-   * document queries resolve in a few milliseconds. Defaults to 100ms.
+   * local queries resolve in a few milliseconds. Defaults to 100ms.
    */
   skeletonDelayMs?: number;
 
@@ -84,21 +88,35 @@ export interface UseJsBaoDataLoaderOptions<
 
 export interface UseJsBaoDataLoaderResult<Data> {
   /**
-   * Latest successfully loaded data. Starts as `null`.
+   * Latest successfully loaded data. Starts as `null`, and goes back to `null`
+   * when `ready` becomes `false` or the query changes, until the next load
+   * lands — so a view never shows one query's rows under another's.
    */
   data: Ref<Data | null>;
 
   /**
-   * Becomes `true` after the first successful load while `documentReady`
-   * is `true`. Reset back to `false` whenever `documentReady` becomes `false`.
+   * Becomes `true` after the first successful load while `ready` is `true`.
+   * Reset back to `false` whenever `ready` becomes `false` or the query
+   * changes.
    */
   initialDataLoaded: Ref<boolean>;
+
+  /**
+   * `true` while a load whose result the loader will publish is running.
+   */
+  isLoading: Ref<boolean>;
+
+  /**
+   * The error the latest load threw, or `null`. Cleared by the next
+   * successful load, and when `ready` becomes `false` or the query changes.
+   */
+  error: Ref<unknown>;
 
   /**
    * Becomes `true` only after `skeletonDelayMs` has elapsed without a
    * successful load. Use this to gate skeletons — it suppresses the brief
    * skeleton flash on fast warm-cache loads. Resets when data loads or
-   * when `documentReady` becomes `false`.
+   * when `ready` becomes `false`.
    */
   showSkeleton: Ref<boolean>;
 
@@ -142,12 +160,21 @@ function stableStringify(value: unknown): string {
  * Reactive data-loading composable with subscriptions and debounced reloads.
  *
  * This helper centralizes a common pattern in the app:
- * - Wait until `documentReady` is true.
+ * - Wait until `ready` is true.
  * - Load data (optionally based on reactive `queryParams`).
- * - Subscribe to model changes and client document events to reload.
+ * - Reload on model changes and on the client's db3 events.
+ *
+ * ```ts
+ * const { data, showSkeleton } = useJsBaoDataLoader({
+ *   subscribeTo: [Note],
+ *   queryParams: null,
+ *   loadData: async () => (await Note.query({})).data,
+ * });
+ * ```
  *
  * @param options Configuration describing what to load, when to load, and what to watch.
- * @returns A `{ data, initialDataLoaded, reload }` bundle for consumption in components.
+ * @returns A `{ data, initialDataLoaded, isLoading, error, showSkeleton, reload }`
+ *   bundle for consumption in components.
  */
 export function useJsBaoDataLoader<
   Data,
@@ -156,10 +183,10 @@ export function useJsBaoDataLoader<
   const {
     subscribeTo,
     queryParams,
-    documentReady,
+    ready,
     loadData,
     pauseUpdates,
-    reloadOnDocumentEvents = true,
+    reloadOnDb3Events = true,
     debounceMs = 50,
     skeletonDelayMs = 100,
     onError,
@@ -167,8 +194,12 @@ export function useJsBaoDataLoader<
 
   const data = ref(null) as Ref<Data | null>;
   const initialDataLoaded = ref(false);
+  const isLoading = ref(false);
+  const lastError = ref<unknown>(null);
+  // A reload was asked for while paused. Ending the pause runs it, once.
+  let reloadPendingWhilePaused = false;
   // True once the skeleton-delay timer fires while a load is in flight. Only
-  // relevant after the document is ready; see `showSkeleton` below.
+  // relevant once `ready`; see `showSkeleton` below.
   const skeletonDelayElapsed = ref(false);
   // #3023 — the load that started last is the one whose result lands. The
   // subscriptions below are deliberately live from the start, so two loads can
@@ -181,7 +212,7 @@ export function useJsBaoDataLoader<
   // waits out the debounce first, and a first load that resolves inside that
   // window would otherwise still count as current: it would publish the empty
   // result the reload exists to replace, and set `initialDataLoaded` — which
-  // is what a one-shot consumer (an "is this document empty?" bootstrap) reads.
+  // is what a one-shot consumer (an "is this db3 empty?" bootstrap) reads.
   let scheduledGeneration: number | null = null;
 
   /**
@@ -212,15 +243,15 @@ export function useJsBaoDataLoader<
     skeletonDelayElapsed.value = false;
   };
 
-  const isReady = computed(() => toBoolean(documentReady, false));
+  const isReady = computed(() => toBoolean(ready, true));
 
   // Whether consumers should render a loading skeleton. This owns the full
   // loading model so templates can just check `showSkeleton`:
   //  - loaded             → never show
-  //  - document opening   → show immediately (the dominant initial-load wait,
+  //  - not ready yet      → show immediately (the dominant initial-load wait,
   //                         which the delay timer does not cover because no
-  //                         load runs until the document is ready)
-  //  - doc ready, loading → show only after the delay timer fires, so fast
+  //                         load runs until `ready`)
+  //  - ready, loading     → show only after the delay timer fires, so fast
   //                         warm reloads don't flash a skeleton
   const showSkeleton = computed(() => {
     if (initialDataLoaded.value) return false;
@@ -242,13 +273,17 @@ export function useJsBaoDataLoader<
         reason,
         queryParams: toRaw(queryValue.value),
       });
+      // Any load still in flight was superseded when this one was scheduled.
+      isLoading.value = false;
       return;
     }
     if (isPaused.value) {
-      logger.debug("loadData skipped: paused", {
+      logger.debug("loadData skipped: paused; it runs when the pause ends", {
         reason,
         queryParams: toRaw(queryValue.value),
       });
+      reloadPendingWhilePaused = true;
+      isLoading.value = false;
       return;
     }
 
@@ -259,6 +294,7 @@ export function useJsBaoDataLoader<
     if (!initialDataLoaded.value) armSkeletonTimer();
     const generation = scheduledGeneration ?? ++loadGeneration;
     scheduledGeneration = null;
+    isLoading.value = true;
     try {
       const result = await loadData(queryValue.value);
       if (generation !== loadGeneration) {
@@ -268,6 +304,8 @@ export function useJsBaoDataLoader<
         return;
       }
       data.value = result;
+      lastError.value = null;
+      isLoading.value = false;
       initialDataLoaded.value = true;
       disarmSkeletonTimer();
       logger.debug("loadData success", {
@@ -287,6 +325,8 @@ export function useJsBaoDataLoader<
         });
         return;
       }
+      lastError.value = error;
+      isLoading.value = false;
       if (onError) {
         try {
           onError(error);
@@ -308,10 +348,30 @@ export function useJsBaoDataLoader<
   }, debounceMs);
 
   const scheduleReload = (reason: string) => {
+    if (isPaused.value) {
+      // Kept, not dropped: the pause ending runs one reload for every change
+      // that arrived meanwhile.
+      reloadPendingWhilePaused = true;
+      return;
+    }
     // Synchronously, ahead of the debounce: from here on the load in flight is
     // stale, whether or not the reload has started (#3023).
     supersedeInFlightLoads();
     runScheduledLoad(reason);
+  };
+
+  /**
+   * Forget what is shown: the rows belong to a query or a db3 the view no
+   * longer reads. Any load in flight or scheduled is retired with them.
+   */
+  const clearData = () => {
+    runScheduledLoad.cancel();
+    loadGeneration++;
+    scheduledGeneration = null;
+    data.value = null;
+    lastError.value = null;
+    isLoading.value = false;
+    initialDataLoaded.value = false;
   };
 
   const reload = () => {
@@ -326,11 +386,10 @@ export function useJsBaoDataLoader<
       try {
         const unsubscribe = model.subscribe(() => {
           // #3023 — deliberately NOT gated on the first load having finished.
-          // The initial sync of a document opened with an empty local replica
+          // The initial sync of a db3 opened with an empty local replica
           // lands while that load is still reading, so a gate here left the
           // view on the empty result with nothing left to move it.
           if (!isReady.value) return;
-          if (isPaused.value) return;
           scheduleReload("Subscribed models changed");
         });
         unsubscribeFns.push(unsubscribe);
@@ -339,34 +398,23 @@ export function useJsBaoDataLoader<
       }
     }
 
-    // Subscribe to js-bao client document events
-    if (toBoolean(reloadOnDocumentEvents, true)) {
+    // Reload when a db3 this view may read becomes ready, gone or evicted.
+    if (toBoolean(reloadOnDb3Events, true)) {
       try {
-        const client = await jsBaoClientService.getClientAsync();
-
-        const handleDocumentLoaded = () => {
-          if (!isReady.value) return;
-          if (isPaused.value) return;
-          scheduleReload("Document loaded");
-        };
-
-        const handleDocumentClosed = () => {
-          if (!isReady.value) return;
-          if (isPaused.value) return;
-          scheduleReload("Document closed");
-        };
-
-        client.on("documentLoaded", handleDocumentLoaded);
-        client.on("documentClosed", handleDocumentClosed);
-
-        unsubscribeFns.push(() => {
-          client.off("documentLoaded", handleDocumentLoaded);
-          client.off("documentClosed", handleDocumentClosed);
-        });
-
-        logger.debug("Subscribed to js-bao document events");
+        const client = await getAppClient();
+        for (const event of ["db3:ready", "db3:gone", "db3:evicted"] as const) {
+          const handler = () => {
+            if (!isReady.value) return;
+            scheduleReload(`Client event ${event}`);
+          };
+          client.on(event, handler);
+          unsubscribeFns.push(() => client.off(event, handler));
+        }
+        logger.debug("Subscribed to the client's db3 events");
       } catch (error) {
-        logger.warn("Failed to subscribe to js-bao client events", { error });
+        logger.warn("Failed to subscribe to the client's db3 events", {
+          error,
+        });
       }
     }
   });
@@ -386,22 +434,31 @@ export function useJsBaoDataLoader<
     isReady,
     (ready) => {
       if (!ready) {
-        logger.debug("documentReady became false; resetting state");
-        initialDataLoaded.value = false;
+        logger.debug("ready became false; resetting state");
+        clearData();
         disarmSkeletonTimer();
         return;
       }
 
-      if (!isPaused.value) {
-        logger.debug("documentReady became true; scheduling initial load");
-        scheduleReload("Document became ready");
-      } else {
-        logger.debug(
-          "documentReady became true but updates are paused; not scheduling load"
-        );
-      }
+      logger.debug("ready became true; scheduling initial load");
+      scheduleReload("Became ready");
     },
     { immediate: true }
+  );
+
+  // Synchronous, so every resume is seen: a batched watcher misses a pause
+  // that begins and ends in one turn (no net change by flush time), and the
+  // change asked for during it would stay pending until some later resume.
+  watch(
+    isPaused,
+    (paused) => {
+      if (paused || !reloadPendingWhilePaused) return;
+      reloadPendingWhilePaused = false;
+      if (!isReady.value) return;
+      logger.debug("updates resumed; reloading what changed while paused");
+      scheduleReload("Resumed after a change while paused");
+    },
+    { flush: "sync" }
   );
 
   watch(querySignature, (signature) => {
@@ -410,18 +467,14 @@ export function useJsBaoDataLoader<
       return;
     }
     if (!isReady.value) {
-      logger.debug("queryParams changed but document not ready; ignoring", {
-        signature,
-      });
-      return;
-    }
-    if (isPaused.value) {
-      logger.debug("queryParams changed but updates are paused; ignoring", {
+      logger.debug("queryParams changed but not ready; ignoring", {
         signature,
       });
       return;
     }
 
+    // The rows on screen answer the previous query.
+    clearData();
     logger.debug("queryParams changed; scheduling reload", { signature });
     scheduleReload("Queries changed");
   });
@@ -429,6 +482,8 @@ export function useJsBaoDataLoader<
   return {
     data,
     initialDataLoaded,
+    isLoading,
+    error: lastError,
     showSkeleton,
     reload,
   };

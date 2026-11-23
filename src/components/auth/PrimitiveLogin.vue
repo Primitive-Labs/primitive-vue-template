@@ -15,10 +15,9 @@ import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/brow
 import { ArrowLeft, Clock, Loader2, Lock, Mail } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { getPendingInviteToken } from "@/lib/inviteToken";
+import { config } from "@/config/envConfig";
 import { appBaseLogger } from "@/lib/logger";
 import { isIOS } from "@/lib/utils";
-import { jsBaoClientService } from "primitive-app";
 import { AUTH_CODES, AuthError, useUserStore } from "@/stores/userStore";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -153,10 +152,9 @@ const appOrigin = computed(() => {
   }
 });
 
-// The redirect URI this app is configured with locally (VITE_OAUTH_REDIRECT_URI).
-const configuredRedirectUri = computed(
-  () => jsBaoClientService.getConfig()?.oauthRedirectUri ?? null
-);
+// The callback URL this app is configured with locally (VITE_OAUTH_REDIRECT_URI,
+// resolved against the page origin).
+const configuredRedirectUri = config.oauthRedirectUri;
 
 const showDivider = computed(() => {
   // Show divider if both email form and Google are available
@@ -194,45 +192,6 @@ const continueUrl = computed(() => {
   }
 
   return "/";
-});
-
-/**
- * Builds the magic link redirect URI.
- * Uses the same oauthRedirectUri configured for the js-bao client,
- * with the continue URL encoded in a state parameter.
- */
-const magicLinkRedirectUri = computed(() => {
-  // Get the OAuth redirect URI from the js-bao config
-  const config = jsBaoClientService.getConfig();
-  const callbackUrl = config?.oauthRedirectUri;
-
-  if (!callbackUrl) {
-    // No callback URL configured. Sign-in still works — the server sends the
-    // same email with the code alone — so this is a warning, not an error, and
-    // the sent view says "if that email also has a link" rather than promising
-    // one. Link issuance is fail-closed on the server too: an empty
-    // `[auth].emailRedirectUris` allow-list yields the same code-only email,
-    // and a request cannot tell which happened.
-    logger.warn(
-      "No oauthRedirectUri configured in js-bao config. Sign-in emails will carry the code only, with no link."
-    );
-    return undefined;
-  }
-
-  // Encode continue URL and email in state parameter (base64)
-  // Email is included so we can auto-resend if the link expires.
-  // inviteToken is included so a pending invitation survives the
-  // cross-tab redirect when the user clicks the magic link in email.
-  const inviteToken = getPendingInviteToken();
-  const state = btoa(
-    JSON.stringify({
-      continueUrl: continueUrl.value,
-      email: email.value,
-      ...(inviteToken ? { inviteToken } : {}),
-    })
-  );
-  const separator = callbackUrl.includes("?") ? "&" : "?";
-  return `${callbackUrl}${separator}state=${encodeURIComponent(state)}`;
 });
 
 const urlError = computed(() => {
@@ -354,8 +313,9 @@ async function handleEmailSubmit(): Promise<void> {
 
 /**
  * One request (#2884). The email that arrives carries a 6-digit code and — as
- * long as this app's callback is on the server's allow-list — a sign-in link,
- * so the single "check your email" state offers both.
+ * long as the client's link target is on the server's allow-list — a sign-in
+ * link, so the single "check your email" state offers both. The link carries
+ * the continue URL, so it lands where the user was going.
  */
 async function handleEmailSignInRequest(): Promise<void> {
   try {
@@ -363,7 +323,9 @@ async function handleEmailSignInRequest(): Promise<void> {
     isLoading.value = true;
     error.value = null;
 
-    await user.requestEmailSignIn(email.value, magicLinkRedirectUri.value);
+    await user.requestEmailSignIn(email.value, {
+      continueUrl: continueUrl.value,
+    });
 
     logger.debug("Sign-in email sent successfully");
     sentEmail.value = email.value;
@@ -425,7 +387,9 @@ async function handleResendOtp(): Promise<void> {
     error.value = null;
     otpCode.value = "";
 
-    await user.requestEmailSignIn(sentEmail.value, magicLinkRedirectUri.value);
+    await user.requestEmailSignIn(sentEmail.value, {
+      continueUrl: continueUrl.value,
+    });
 
     logger.debug("Sign-in email resent successfully");
     startResendCooldown(30);
